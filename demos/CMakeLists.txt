@@ -133,6 +133,9 @@ endfunction()
 # Spectre V1 PHT SA -- mistraining PHT in the same address space
 add_demo(spectre_v1_pht_sa)
 
+# Spectre V1 PHT SA (mitigated) -- speculation barrier blocks the leak
+add_demo(spectre_v1_pht_sa_mitigate)
+
 # Spectre V1 BTB SA -- mistraining BTB in the same address space
 add_demo(spectre_v1_btb_sa)
 
