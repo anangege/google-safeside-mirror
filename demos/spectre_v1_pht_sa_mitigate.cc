@@ -96,8 +96,7 @@ static char LeakByte(const char *data, size_t offset) {
     }
 
     if (run > 100000) {
-      std::cerr << "Does not converge (mitigation likely effective)"
-                << std::endl;
+      std::cerr << "Does not converge" << std::endl;
       exit(EXIT_FAILURE);
     }
   }

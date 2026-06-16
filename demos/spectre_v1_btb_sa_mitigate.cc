@@ -167,8 +167,7 @@ static char LeakByte(size_t offset) {
     }
 
     if (run > 100000) {
-      std::cerr << "Does not converge (double-barrier mitigation likely"
-                << " effective) " << result.second << std::endl;
+      std::cerr << "Does not converge " << result.second << std::endl;
       exit(EXIT_FAILURE);
     }
   }
