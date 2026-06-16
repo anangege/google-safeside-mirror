@@ -139,6 +139,9 @@ add_demo(spectre_v1_pht_sa_mitigate)
 # Spectre V1 BTB SA -- mistraining BTB in the same address space
 add_demo(spectre_v1_btb_sa)
 
+# Spectre V1 BTB SA (mitigated) -- double speculation barrier blocks the leak
+add_demo(spectre_v1_btb_sa_mitigate)
+
 # Spectre V4 -- speculative store bypass
 add_demo(spectre_v4)
 
