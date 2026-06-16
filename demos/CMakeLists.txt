@@ -142,10 +142,9 @@ add_demo(spectre_v1_btb_sa)
 # Spectre V1 BTB SA (mitigated) -- double speculation barrier blocks the leak
 add_demo(spectre_v1_btb_sa_mitigate)
 
-# SLS (Straight-Line Speculation) -- speculative execution past ret via RAS
-# underflow. ARM64 only, requires naked functions (GCC/Clang).
+# Spectre SLS -- Straight-Line Speculation via RAS underflow (ARM64)
 if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-  add_demo(sls_sa PROCESSORS aarch64 arm64)
+  add_demo(spectre_sls PROCESSORS aarch64 arm64)
 endif()
 
 # Spectre V4 -- speculative store bypass
