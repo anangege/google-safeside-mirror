@@ -81,7 +81,13 @@ if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "^(i[3456]86)|(x86_64)|(x86)|(AMD64)$")
   endif()
 else()
   # For other platforms we can just trust CMake's value.
-  set(ASM_PLATFORM ${CMAKE_SYSTEM_PROCESSOR})
+  # On macOS, CMAKE_SYSTEM_PROCESSOR reports "arm64" but our assembly files
+  # use "aarch64" naming. Map arm64 to aarch64 for consistency.
+  if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64")
+    set(ASM_PLATFORM aarch64)
+  else()
+    set(ASM_PLATFORM ${CMAKE_SYSTEM_PROCESSOR})
+  endif()
 endif()
 
 # Compile the assembly implementation into to the support library.
@@ -142,7 +148,7 @@ add_demo(spectre_v1_btb_sa)
 # Spectre V1 BTB SA (mitigated) -- double speculation barrier blocks the leak
 add_demo(spectre_v1_btb_sa_mitigate)
 
-# Spectre SLS -- Straight-Line Speculation via RAS underflow (ARM64)
+# Spectre SLS -- Straight-Line Speculation via indirect branch BTB miss (ARM64)
 if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
   add_demo(spectre_sls PROCESSORS aarch64 arm64)
 endif()

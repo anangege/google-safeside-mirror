@@ -7,9 +7,17 @@
  * SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
  */
 
-.global MeasureReadLatency
+// macOS (Mach-O) decorates C symbols with a leading underscore.
+// Linux (ELF) does not.
+#ifdef __APPLE__
+#define SYMBOL(name) _##name
+#else
+#define SYMBOL(name) name
+#endif
+
+.global SYMBOL(MeasureReadLatency)
 // uint64_t MeasureReadLatency(const void* address);
-MeasureReadLatency:
+SYMBOL(MeasureReadLatency):
   // x0 = address
 
   // Full memory and speculation barrier. See docs/fencing.md for details.
