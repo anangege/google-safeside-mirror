@@ -9,7 +9,7 @@
 
 // Mitigated variant of spectre_sls.cc.
 //
-// This demonstrates that inserting an SB (Speculation Barrier) instruction
+// This demonstrates that inserting a speculation barrier (DSB SY + ISB)
 // immediately after the BR instruction in the victim function prevents the
 // Spectre SLS (Straight-Line Speculation) attack from leaking data.
 //
@@ -20,21 +20,20 @@
 //   touches a cache oracle entry, creating a side-channel leak.
 //
 // HOW THE MITIGATION WORKS:
-//   The SB instruction (FEAT_SB, Armv8.0-A optional, Armv8.5-A mandatory)
-//   blocks speculative execution past the barrier. When placed immediately
-//   after BR, the CPU cannot speculatively fetch or execute the straight-line
-//   payload instructions. The BR target must be architecturally resolved
-//   before any subsequent instruction is speculatively executed.
+//   DSB SY + ISB blocks speculative execution past the barrier. When placed
+//   immediately after BR, the CPU cannot speculatively fetch or execute the
+//   straight-line payload instructions. The BR target must be architecturally
+//   resolved before any subsequent instruction is speculatively executed.
+//   We use DSB SY + ISB instead of SB for compatibility with Armv8.0-A+.
 //
 // EXPECTED RESULT:
 //   Unlike the original spectre_sls, this variant should NOT leak
 //   private_data. The program will likely print garbage or fail to converge,
-//   demonstrating that SB effectively closes the SLS side channel.
+//   demonstrating that the barrier effectively closes the SLS side channel.
 //
 // PLATFORM NOTES:
-//   This demo targets ARM64 (AArch64) only. The SB instruction requires
-//   FEAT_SB support (Armv8.5-A+). On older cores without FEAT_SB, use
-//   "dsb sy\n isb\n" as an equivalent barrier.
+//   This demo targets ARM64 (AArch64) only. DSB SY + ISB is available on
+//   all Armv8.0-A+ implementations.
 
 #include "compiler_specifics.h"
 
@@ -140,7 +139,7 @@ uint64_t calibrate_miss_min(void) {
  
 static void dummy_target() {}
 
-// victim: identical to spectre_sls.cc EXCEPT for the SB instruction
+// victim: identical to spectre_sls.cc EXCEPT for the DSB SY + ISB barrier
 // inserted immediately after BR.
 //
 // Original (vulnerable):
@@ -151,7 +150,8 @@ static void dummy_target() {}
 //
 // Mitigated:
 //   br  %[go]
-//   sb                       <-- blocks straight-line speculation
+//   dsb sy                   <-- blocks straight-line speculation
+//   isb
 //   ldrb w3, [%[sec]]       <-- never reached speculatively
 //   add  x3, %[ch], x3, lsl 12
 //   ldr  x4, [x3]
@@ -161,15 +161,16 @@ int victim(const char *secret_addr, uint64_t godummy,
         " br %[go]\n"
         // === MITIGATION: speculation barrier ===
         //
-        // SB (Speculation Barrier) prevents the CPU from speculatively
-        // executing instructions past this point until the preceding BR
-        // is architecturally resolved. This blocks the straight-line
+        // DSB SY + ISB prevents the CPU from speculatively executing
+        // instructions past this point until the preceding BR is
+        // architecturally resolved. This blocks the straight-line
         // speculation that the SLS attack relies on.
         //
-        // On cores without FEAT_SB (pre-Armv8.5-A), replace with:
-        //   " dsb sy\n"
-        //   " isb\n"
-        " sb\n"
+        // We use DSB SY + ISB instead of SB because SB (FEAT_SB)
+        // requires Armv8.5-A+, while DSB SY + ISB is available on
+        // all Armv8.0-A+ implementations.
+        " dsb sy\n"
+        " isb\n"
         " ldrb w3, [%[sec]]\n"
         " add x3, %[ch], x3, lsl 12\n"
         " ldr x4, [x3]\n"
@@ -230,7 +231,7 @@ int main() {
     g_target = (uint64_t *)malloc(sizeof(uint64_t));
 
     miss_min = calibrate_miss_min();
-    std::cout << "Attempting to leak (with SLS mitigation - SB after BR): ";
+    std::cout << "Attempting to leak (with SLS mitigation - DSB+ISB after BR): ";
     std::cout.flush();
     for (size_t i = 0; i < strlen(private_data); ++i) {
         std::cout << LeakByte(i);
