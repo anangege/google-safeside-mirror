@@ -110,7 +110,7 @@ uint64_t calibrate_miss_min(void) {
             min_val = latency;
         sum += latency;
     } 
-    printf("[CALIBRATE] Cache miss (MeasureReadLatency): Avg=%llu, min=%llu",
+    printf("[CALIBRATE] Cache miss (MeasureReadLatency): Avg=%llu, min=%llu\n",
            (unsigned long long)(sum / rounds), (unsigned long long)min_val);
 
     uint64_t hit_sum = 0;
@@ -119,13 +119,13 @@ uint64_t calibrate_miss_min(void) {
         uint64_t latency = MeasureReadLatency(&channel[(r % 3) * CHANNEL_SEGMENT]);
         hit_sum += latency;
     } 
-    printf("[CALIBRATE] Cache hit (MeasureReadLatency): Avg=%llu",
+    printf("[CALIBRATE] Cache hit (MeasureReadLatency): Avg=%llu\n",
            (unsigned long long)(hit_sum / rounds));
    
     if (min_val > 4)
         min_val -= 2;
   
-    printf("[CALIBRATE] miss_min threshold=%llu", (unsigned long long)min_val);
+    printf("[CALIBRATE] miss_min threshold=%llu\n", (unsigned long long)min_val);
     return min_val;
 }
  
