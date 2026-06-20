@@ -151,6 +151,9 @@ add_demo(spectre_v1_btb_sa_mitigate)
 # Spectre SLS -- Straight-Line Speculation via indirect branch BTB miss (ARM64)
 if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
   add_demo(spectre_sls PROCESSORS aarch64 arm64)
+
+  # Spectre SLS (mitigated) -- SB instruction after BR blocks straight-line speculation
+  add_demo(spectre_sls_mitigate PROCESSORS aarch64 arm64)
 endif()
 
 # Spectre V4 -- speculative store bypass
