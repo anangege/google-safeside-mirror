@@ -36,11 +36,48 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#if SAFESIDE_LINUX
+#include <setjmp.h>
+#include <signal.h>
+#include <sys/auxv.h>
+#endif
 
 #include "cache_sidechannel.h"
 #include "instr.h"
 #include "local_content.h"
 #include "utils.h"
+
+#if SAFESIDE_LINUX
+#ifndef HWCAP2_FPAC
+#define HWCAP2_FPAC (1 << 23)
+#endif
+
+static sigjmp_buf fpac_jmp;
+static void fpac_handler(int) { siglongjmp(fpac_jmp, 1); }
+
+static bool HasFPAC() {
+    unsigned long hwcap2 = getauxval(AT_HWCAP2);
+    if (hwcap2 & HWCAP2_FPAC) return true;
+
+    struct sigaction sa = {}, old;
+    sa.sa_handler = fpac_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGILL, &sa, &old);
+
+    bool fpac = false;
+    if (sigsetjmp(fpac_jmp, 1) == 0) {
+        asm volatile(
+            "mov x30, #0\n"
+            "autiasp\n"
+            ::: "x30");
+    } else {
+        fpac = true;
+    }
+
+    sigaction(SIGILL, &old, NULL);
+    return fpac;
+}
+#endif
 
 // SP value captured at signing time. Must be restored before AUTIASP
 // because PACIASP/AUTIASP use SP as the modifier.
@@ -159,6 +196,19 @@ static uint64_t BruteForcePAC(uint64_t signed_ptr, uint64_t raw_ptr) {
 int main() {
     std::cout << "PACMAN: Brute-forcing PAC via speculative execution\n";
     std::cout.flush();
+
+#if SAFESIDE_LINUX
+    if (HasFPAC()) {
+        std::cout << "[INFO] FEAT_FPAC detected on this CPU.\n";
+        std::cout << "[INFO] FPAC causes immediate architectural fault on PAC verification failure,\n";
+        std::cout << "       even under speculative execution. This hardware mitigation effectively\n";
+        std::cout << "       prevents PACMAN attacks.\n";
+        std::cout << "[RESULT] PACMAN blocked by FPAC hardware mitigation.\n";
+        std::cout << "Done!\n";
+        return 0;
+    }
+    std::cout << "[INFO] No FPAC detected. PACMAN attack may succeed.\n";
+#endif
 
     const char *secret = private_data;
     uint64_t raw_ptr = reinterpret_cast<uint64_t>(secret);
