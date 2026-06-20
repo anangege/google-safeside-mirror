@@ -154,6 +154,9 @@ if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 
   # Spectre SLS (mitigated) -- SB instruction after BR blocks straight-line speculation
   add_demo(spectre_sls_mitigate PROCESSORS aarch64 arm64)
+
+  # PACMAN -- brute-force PAC via speculative execution + cache side channel
+  add_demo(pacman PROCESSORS aarch64 arm64)
 endif()
 
 # Spectre V4 -- speculative store bypass
