@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PACMAN - 指针认证码暴力破解攻击深度解析</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --warn: #d29922;
+    --danger: #f85149;
+    --code-bg: #0d1117;
+    --highlight: rgba(88,166,255,0.15);
+    --purple: #d2a8ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+  }
+  h1 { font-size: 2.2rem; margin-bottom: 0.3rem; background: linear-gradient(135deg, var(--purple), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); color: var(--accent); }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--accent2); }
+  .subtitle { color: var(--text-dim); font-size: 1.05rem; margin-bottom: 2rem; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; margin-right: 6px; }
+  .badge-blue { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .badge-green { background: rgba(126,231,135,0.2); color: var(--accent2); }
+  .badge-red { background: rgba(248,81,73,0.2); color: var(--danger); }
+  .badge-yellow { background: rgba(210,153,34,0.2); color: var(--warn); }
+  .badge-purple { background: rgba(210,168,255,0.2); color: var(--purple); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
+  .card-warn { border-left: 4px solid var(--warn); }
+  .card-danger { border-left: 4px solid var(--danger); }
+  .card-info { border-left: 4px solid var(--accent); }
+  .card-success { border-left: 4px solid var(--accent2); }
+  .card-purple { border-left: 4px solid var(--purple); }
+
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0; font-size: 0.88rem; line-height: 1.6; }
+  code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace; }
+  p code, li code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-size: 0.88em; color: var(--accent); }
+  .code-comment { color: #6a737d; }
+  .code-keyword { color: #ff7b72; }
+  .code-type { color: #79c0ff; }
+  .code-string { color: #a5d6ff; }
+  .code-number { color: #79c0ff; }
+  .code-func { color: #d2a8ff; }
+  .code-highlight { background: var(--highlight); display: block; margin: 0 -1.2rem; padding: 0 1.2rem; border-left: 3px solid var(--accent); }
+
+  details { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin: 0.8rem 0; }
+  details summary { padding: 0.8rem 1.2rem; cursor: pointer; font-weight: 600; user-select: none; }
+  details summary:hover { background: var(--surface2); }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .detail-body { padding: 1rem 1.2rem; }
+
+  .diagram-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; overflow-x: auto; }
+  .flow-steps { display: flex; flex-direction: column; gap: 0; }
+  .flow-step { display: flex; align-items: flex-start; gap: 1rem; position: relative; }
+  .flow-step-num { flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; position: relative; z-index: 1; }
+  .flow-step-line { position: absolute; left: 17px; top: 36px; bottom: -1px; width: 2px; }
+  .flow-step:last-child .flow-step-line { display: none; }
+  .flow-step-content { flex: 1; padding-bottom: 1.5rem; }
+  .flow-step-title { font-weight: 600; margin-bottom: 0.3rem; }
+  .flow-step-desc { color: var(--text-dim); font-size: 0.92rem; }
+
+  .step-sign .flow-step-num { background: rgba(210,168,255,0.2); color: var(--purple); }
+  .step-sign .flow-step-line { background: var(--purple); }
+  .step-train .flow-step-num { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .step-train .flow-step-line { background: var(--accent); }
+  .step-spec .flow-step-num { background: rgba(248,81,73,0.2); color: var(--danger); }
+  .step-spec .flow-step-line { background: var(--danger); }
+  .step-leak .flow-step-num { background: rgba(126,231,135,0.2); color: var(--accent2); }
+  .step-leak .flow-step-line { background: var(--accent2); }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.92rem; }
+  th { background: var(--surface2); text-align: left; padding: 0.6rem 1rem; border: 1px solid var(--border); color: var(--accent); }
+  td { padding: 0.6rem 1rem; border: 1px solid var(--border); }
+  tr:hover td { background: var(--surface); }
+
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc-title { font-weight: 700; margin-bottom: 0.5rem; color: var(--accent); }
+  .toc ol { padding-left: 1.5rem; }
+  .toc li { margin: 0.3rem 0; }
+  .toc a { color: var(--text-dim); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .compare-grid > div { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; }
+  .compare-label { font-weight: 700; font-size: 0.9rem; margin-bottom: 0.8rem; }
+  .compare-label.vuln { color: var(--danger); }
+  .compare-label.fix { color: var(--accent2); }
+
+  .bit-field { display: flex; font-family: monospace; font-size: 0.82rem; margin: 1rem 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .bit-field > div { padding: 10px 14px; text-align: center; border-right: 1px solid var(--border); }
+  .bit-field > div:last-child { border-right: none; }
+  .bit-pac { background: rgba(210,168,255,0.15); color: var(--purple); flex: 1; }
+  .bit-tbi { background: rgba(88,166,255,0.1); color: var(--accent); flex: 0.5; }
+  .bit-addr { background: rgba(126,231,135,0.1); color: var(--accent2); flex: 3; }
+
+  .sim-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .sim-controls { display: flex; gap: 0.8rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .sim-btn { padding: 0.5rem 1.2rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--text); cursor: pointer; font-size: 0.9rem; transition: all 0.2s; }
+  .sim-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .sim-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .sim-log { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem; margin-top: 1rem; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.82rem; color: var(--text-dim); }
+  .sim-log .log-entry { margin: 2px 0; }
+  .sim-log .log-sign { color: var(--purple); }
+  .sim-log .log-train { color: var(--accent); }
+  .sim-log .log-spec { color: var(--danger); }
+  .sim-log .log-leak { color: var(--accent2); }
+
+  .pac-grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; margin: 0.5rem 0; }
+  .pac-cell { aspect-ratio: 1; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-family: monospace; transition: all 0.3s; }
+  .pac-untested { background: var(--surface2); color: var(--text-dim); }
+  .pac-wrong { background: rgba(248,81,73,0.2); color: var(--danger); }
+  .pac-correct { background: rgba(126,231,135,0.4); color: var(--accent2); box-shadow: 0 0 12px rgba(126,231,135,0.4); }
+  .pac-current { background: rgba(210,153,34,0.3); color: var(--warn); box-shadow: 0 0 8px rgba(210,153,34,0.3); }
+
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    h1 { font-size: 1.6rem; }
+    pre { font-size: 0.8rem; padding: 0.8rem; }
+    .compare-grid { grid-template-columns: 1fr; }
+    .bit-field { flex-direction: column; }
+    .bit-field > div { border-right: none; border-bottom: 1px solid var(--border); }
+  }
+  [id] { scroll-margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>PACMAN 指针认证码暴力破解深度解析</h1>
+<p class="subtitle">
+  <span class="badge badge-purple">ISCA 2022</span>
+  <span class="badge badge-blue">ARM64 PAC</span>
+  <span class="badge badge-red">Speculative Execution</span>
+  <span class="badge badge-yellow">MIT CSAIL</span>
+</p>
+<p style="color:var(--text-dim); margin-bottom: 1.5rem;">
+  利用推测执行抑制 PAC 验证失败的架构异常，构建 "PAC Oracle" 暴力枚举指针认证码（PAC），通过缓存侧信道检测正确猜测，从而绕过 ARM Pointer Authentication 保护。
+</p>
+
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <ol>
+    <li><a href="#overview">攻击概览与核心思想</a></li>
+    <li><a href="#prerequisites">前置知识</a></li>
+    <li><a href="#architecture">整体架构与数据流</a></li>
+    <li><a href="#flow">攻击流程详解 (5 步)</a></li>
+    <li><a href="#code">源码逐行解析</a></li>
+    <li><a href="#sp">SP 一致性问题</a></li>
+    <li><a href="#simulation">交互式模拟演示</a></li>
+    <li><a href="#design">关键设计决策</a></li>
+    <li><a href="#build">构建与运行</a></li>
+    <li><a href="#mitigation">防御与缓解</a></li>
+    <li><a href="#affected">受影响平台</a></li>
+  </ol>
+</nav>
+
+<h2 id="overview">1. 攻击概览与核心思想</h2>
+
+<div class="card card-purple">
+  <h3>一句话总结</h3>
+  <p>ARM PAC 验证失败时（<code>AUTIASP</code>），在正常执行下只会损坏指针（不立即崩溃），但在推测执行中，错误的 PAC 导致的后续 fault 会被 squash — <strong>攻击者无法区分"正确"和"错误"</strong>。PACMAN 利用这一点，将 PAC 验证放入推测执行窗口，通过缓存侧信道判断 PAC 是否正确，从而暴力枚举 7-bit PAC（仅 128 种可能）。</p>
+</div>
+
+<h3>攻击名称解析</h3>
+<table>
+  <tr><th>组件</th><th>含义</th><th>本 Demo 中的体现</th></tr>
+  <tr><td><strong>PAC</strong></td><td>Pointer Authentication Code — 指针认证码</td><td>ARMv8.3-A 引入的指针签名机制，PAC 存储在指针高位</td></tr>
+  <tr><td><strong>MAN</strong></td><td>推测执行辅助的暴力破解</td><td>利用 Spectre v1 PHT 误训练创建推测窗口，暴力枚举 PAC 值</td></tr>
+  <tr><td><strong>PAC Oracle</strong></td><td>判断 PAC 猜测是否正确的预言</td><td>PAC 正确 → dereference 成功 → oracle 被访问；PAC 错误 → fault → oracle 未访问</td></tr>
+</table>
+
+<h3>核心攻击链</h3>
+<div class="diagram-container">
+  <div style="text-align:center; font-family: monospace; font-size: 0.9rem; line-height: 2.2; color: var(--text-dim);">
+    <span style="color:var(--purple)">PACIASP 签名</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--accent)">暴力枚举 PAC (0-127)</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--danger)">推测执行 AUTIASP + deref</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--accent2)">缓存侧信道检测</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--text)">恢复 PAC</span>
+  </div>
+</div>
+
+<h2 id="prerequisites">2. 前置知识</h2>
+
+<details>
+  <summary>什么是 ARM Pointer Authentication (PAuth)？</summary>
+  <div class="detail-body">
+    <p>ARMv8.3-A 引入的硬件安全机制，在指针的高位存储一个加密签名（PAC），用于检测指针篡改。核心指令：</p>
+    <ul>
+      <li><code>PACIASP</code>：用 Key A + SP 作为 modifier 对 X30 签名，PAC 写入 X30 高位</li>
+      <li><code>AUTIASP</code>：用 Key A + SP 验证 X30 中的 PAC。正确则恢复原始指针；错误则损坏指针（高位写入错误码）</li>
+    </ul>
+    <p>PAC 使用 QARMA 算法计算，密钥存储在系统寄存器中，用户态无法读取。</p>
+  </div>
+</details>
+
+<details>
+  <summary>签名指针的位域结构</summary>
+  <div class="detail-body">
+    <p>在 48-bit 虚拟地址 + TBI (Top Byte Ignore) 配置下：</p>
+    <div class="bit-field">
+      <div class="bit-pac">PAC<br><small>bits 48-54 (7 bit)</small></div>
+      <div class="bit-tbi">TBI<br><small>bit 55</small></div>
+      <div class="bit-addr">Virtual Address<br><small>bits 0-47 (48 bit)</small></div>
+    </div>
+    <p>PAC 仅占 <strong>7 bit = 128 种可能</strong>，这使得暴力枚举在推测执行辅助下成为可行攻击。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么推测执行能抑制 PAC 验证失败？</summary>
+  <div class="detail-body">
+    <p>在没有 FPAC 的 CPU 上，<code>AUTIASP</code> 验证失败时不会立即产生异常，而是将指针高位替换为错误码。后续使用该指针的 <code>LDR</code> 指令才会触发 fault。</p>
+    <p>如果整个序列（AUTIASP + LDR + oracle access）都在<strong>推测执行</strong>中（由 Spectre v1 PHT 误训练触发），那么：</p>
+    <ul>
+      <li>PAC 正确 → LDR 成功 → oracle 被访问 → 缓存副作用</li>
+      <li>PAC 错误 → LDR fault → 推测被 squash → <strong>无架构异常，无缓存副作用</strong></li>
+    </ul>
+    <p>这就是 PAC Oracle 的核心：通过缓存侧信道区分"正确"和"错误"，而不会崩溃。</p>
+  </div>
+</details>
+
+<details>
+  <summary>什么是 Spectre v1 PHT 误训练？</summary>
+  <div class="detail-body">
+    <p>PHT (Pattern History Table) 是 CPU 的条件分支预测器。通过连续 2047 次让分支条件为 true，PHT 学会预测"总是 taken"。第 2048 次即使条件为 false，CPU 也会推测执行分支体内的代码 — 这就是推测执行窗口。</p>
+    <p>PACMAN 利用这个窗口将 PACMAN gadget（AUTIASP + dereference + oracle access）放入推测执行中。</p>
+  </div>
+</details>
+
+<h2 id="architecture">3. 整体架构与数据流</h2>
+
+<h3>组件关系图</h3>
+<div class="diagram-container">
+<pre style="border:none; margin:0; background:transparent; color: var(--text-dim); font-size: 0.85rem;">
+┌─────────────────────────────────────────────────────────────────────┐
+│                          pacman.cc                                  │
+│                                                                     │
+│  main()                                                             │
+│    │                                                                │
+│    ├─ SignPointer(private_data)  ← PACIASP 签名指针                 │
+│    │    ├─ mov x30, ptr             保存 SP 到 g_sign_sp            │
+│    │    ├─ paciasp                  用 Key A + SP 签名              │
+│    │    └─ mov result, x30          返回签名后的指针                 │
+│    │                                                                │
+│    ├─ ExtractPAC(signed_ptr)       ← 提取实际 PAC (bits 48-54)     │
+│    │                                                                │
+│    └─ BruteForcePAC(signed_ptr, raw_ptr)                            │
+│         │                                                           │
+│         └─ for guess = 0..127:                                      │
+│              ├─ InsertPAC(raw_ptr, guess)  ← 构造猜测指针           │
+│              │                                                      │
+│              └─ TryPACGuess(guessed_ptr)                            │
+│                   │                                                 │
+│                   ├─ Spectre v1 PHT 训练 (2048 iters)               │
+│                   │    ├─ [0..2046]: safe access → PHT 训练         │
+│                   │    └─ [2047]:    PacmanGadget → 推测执行        │
+│                   │                                                 │
+│                   ├─ PacmanGadget (推测执行)                        │
+│                   │    ├─ mov sp, g_sign_sp  ← 恢复签名时 SP       │
+│                   │    ├─ autiasp            ← 验证猜测的 PAC       │
+│                   │    ├─ ldrb w3, [x30]     ← dereference          │
+│                   │    └─ ldrb w3, [oracle]  ← 缓存副作用          │
+│                   │                                                 │
+│                   └─ RecomputeScores()      ← 检测缓存命中          │
+│                        └─ 命中 → PAC 正确！返回 guess               │
+└─────────────────────────────────────────────────────────────────────┘
+</pre>
+</div>
+
+<h2 id="flow">4. 攻击流程详解</h2>
+
+<div class="flow-steps">
+  <div class="flow-step step-sign">
+    <div class="flow-step-num">1</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">PACIASP 签名指针 + 保存 SP</div>
+      <div class="flow-step-desc">
+        用 <code>PACIASP</code> 对 <code>private_data</code> 指针签名。PAC 存储在 bits 48-54（7 bit）。同时保存当前 SP 到 <code>g_sign_sp</code>，因为 <code>AUTIASP</code> 验证时需要相同的 SP 作为 modifier。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-sign">
+    <div class="flow-step-num">2</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">暴力枚举 PAC (0-127)</div>
+      <div class="flow-step-desc">
+        对每个猜测值 <code>guess</code>，用 <code>InsertPAC(raw_ptr, guess)</code> 替换指针中的 PAC 位，构造带猜测 PAC 的指针。7 bit = 128 种可能，暴力枚举可行。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-train">
+    <div class="flow-step-num">3</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">Spectre v1 PHT 训练 — 创建推测窗口</div>
+      <div class="flow-step-desc">
+        2047 次 in-bounds 访问训练 PHT，第 2048 次触发误预测，使 CPU 推测执行 <code>PacmanGadget</code>。这确保了 PAC 验证和 dereference 都在推测执行中完成，错误的 PAC 不会导致架构异常。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-spec">
+    <div class="flow-step-num">4</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">PacmanGadget — 推测执行 PAC 验证</div>
+      <div class="flow-step-desc">
+        在推测执行窗口中：
+        <ul style="margin-top:0.5rem;">
+          <li>恢复签名时的 SP（<code>mov sp, g_sign_sp</code>）</li>
+          <li><code>AUTIASP</code> 验证猜测的 PAC</li>
+          <li>PAC 正确 → 指针有效 → <code>LDRB</code> 成功 → oracle 被访问 → 缓存副作用</li>
+          <li>PAC 错误 → 指针损坏 → <code>LDRB</code> fault → 推测 squash → 无副作用</li>
+        </ul>
+        <div class="card card-danger" style="margin-top:0.8rem;">
+          <strong>关键：</strong>错误的 PAC 猜测在推测中被 squash，不会产生架构异常。这就是 PACMAN 能暴力枚举而不崩溃的原因。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-leak">
+    <div class="flow-step-num">5</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">缓存侧信道检测 — 确认 PAC 猜测</div>
+      <div class="flow-step-desc">
+        <code>RecomputeScores()</code> 测量 256 个 oracle 元素的读取延迟。如果某个元素延迟显著低于其他 → 该元素被推测访问 → PAC 猜测正确。找到正确 PAC 后返回。
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 id="code">5. 源码逐行解析</h2>
+
+<h3>SignPointer — PACIASP 签名</h3>
+<pre><code><span class="code-keyword">static uint64_t</span> <span class="code-func">SignPointer</span>(<span class="code-keyword">const void</span> *ptr) {
+    <span class="code-type">uint64_t</span> result;
+    <span class="code-func">asm volatile</span>(
+<span class="code-highlight">        <span class="code-string">"mov %1, sp\n"</span>           <span class="code-comment">// 保存当前 SP 到 g_sign_sp</span></span>
+        <span class="code-string">"mov x30, %2\n"</span>          <span class="code-comment">// 指针 → X30 (PACIASP 操作 X30)</span>
+<span class="code-highlight">        <span class="code-string">"paciasp\n"</span>              <span class="code-comment">// 用 Key A + SP 签名 X30</span></span>
+        <span class="code-string">"mov %0, x30\n"</span>          <span class="code-comment">// 签名结果 → result</span>
+        : <span class="code-string">"=r"</span>(result), <span class="code-string">"=r"</span>(g_sign_sp)
+        : <span class="code-string">"r"</span>(<span class="code-func">reinterpret_cast&lt;uint64_t&gt;</span>(ptr))
+        : <span class="code-string">"x30"</span>);
+    <span class="code-keyword">return</span> result;
+}</code></pre>
+
+<h3>PacmanGadget — 推测执行核心</h3>
+<pre><code><span class="code-keyword">static void</span> <span class="code-func">PacmanGadget</span>(<span class="code-type">uint64_t</span> signed_ptr,
+                          <span class="code-keyword">const void</span> *oracle_base) {
+    <span class="code-func">asm volatile</span>(
+<span class="code-highlight">        <span class="code-string">"mov x4, sp\n"</span>           <span class="code-comment">// 保存当前 SP</span></span>
+<span class="code-highlight">        <span class="code-string">"mov sp, %[sign_sp]\n"</span>   <span class="code-comment">// 恢复签名时的 SP (modifier 一致)</span></span>
+        <span class="code-string">"mov x30, %[ptr]\n"</span>      <span class="code-comment">// 猜测的指针 → X30</span>
+<span class="code-highlight">        <span class="code-string">"autiasp\n"</span>              <span class="code-comment">// 验证 PAC (正确→指针有效, 错误→指针损坏)</span></span>
+<span class="code-highlight">        <span class="code-string">"mov sp, x4\n"</span>           <span class="code-comment">// 恢复当前 SP (不影响后续栈操作)</span></span>
+        <span class="code-string">"ldrb w3, [x30]\n"</span>       <span class="code-comment">// dereference (PAC 错→fault→squash)</span>
+        <span class="code-string">"add x3, %[oracle], x3, lsl 12\n"</span> <span class="code-comment">// oracle + byte × 4096</span>
+        <span class="code-string">"ldrb w3, [x3]\n"</span>        <span class="code-comment">// 访问 oracle → 缓存副作用</span>
+        :
+        : [<span class="code-type">ptr</span>] <span class="code-string">"r"</span>(signed_ptr),
+          [<span class="code-type">oracle</span>] <span class="code-string">"r"</span>(oracle_base),
+          [<span class="code-type">sign_sp</span>] <span class="code-string">"r"</span>(g_sign_sp)
+        : <span class="code-string">"x3"</span>, <span class="code-string">"x4"</span>, <span class="code-string">"x30"</span>, <span class="code-string">"memory"</span>);
+}</code></pre>
+
+<h3>InsertPAC — 构造猜测指针</h3>
+<pre><code><span class="code-comment">// 替换指针 bits 48-54 为猜测的 PAC 值</span>
+<span class="code-keyword">static uint64_t</span> <span class="code-func">InsertPAC</span>(<span class="code-type">uint64_t</span> raw_ptr, <span class="code-type">uint64_t</span> guessed_pac) {
+    <span class="code-keyword">return</span> (raw_ptr &amp; <span class="code-number">0x0000FFFFFFFFFFFF</span>) | (guessed_pac &lt;&lt; <span class="code-number">48</span>);
+}</code></pre>
+
+<h2 id="sp">6. SP 一致性问题</h2>
+
+<div class="card card-warn">
+  <h3>为什么需要保存/恢复 SP？</h3>
+  <p><code>PACIASP</code> 和 <code>AUTIASP</code> 使用 SP 作为 PAC 计算的 modifier。PAC 的值取决于三个输入：</p>
+  <ul>
+    <li>指针值（被签名的地址）</li>
+    <li>Key A（系统寄存器中的密钥）</li>
+    <li><strong>SP（栈指针，作为 modifier）</strong></li>
+  </ul>
+  <p>如果签名和验证时 SP 不同，即使 PAC 值正确，验证也会失败 — 因为 modifier 不匹配。因此代码在签名时保存 SP 到 <code>g_sign_sp</code>，在 gadget 中恢复，确保 modifier 一致。</p>
+</div>
+
+<h3>SP 操作流程</h3>
+<div class="diagram-container">
+<pre style="border:none; margin:0; background:transparent; color: var(--text-dim); font-size: 0.85rem;">
+<span style="color:var(--purple)">SignPointer:</span>
+  mov  g_sign_sp, sp     <span style="color:var(--accent2)">← 保存签名时的 SP</span>
+  mov  x30, ptr
+  paciasp                 <span style="color:var(--accent2)">← PAC = f(ptr, KeyA, SP)</span>
+
+<span style="color:var(--danger)">PacmanGadget (推测执行):</span>
+  mov  x4, sp             <span style="color:var(--text-dim)">← 保存当前 SP</span>
+  mov  sp, g_sign_sp      <span style="color:var(--accent2)">← 恢复签名时的 SP</span>
+  mov  x30, guessed_ptr
+  autiasp                  <span style="color:var(--accent2)">← 验证: PAC == f(guessed_ptr, KeyA, SP)?</span>
+  mov  sp, x4             <span style="color:var(--text-dim)">← 恢复当前 SP (不影响后续栈)</span>
+</pre>
+</div>
+
+<h2 id="simulation">7. 交互式模拟演示</h2>
+
+<div class="sim-container">
+  <p style="margin-bottom:1rem; color:var(--text-dim);">模拟 PACMAN 暴力破解 PAC 的核心流程。点击按钮逐步观察。</p>
+  <div class="sim-controls">
+    <button class="sim-btn" onclick="simReset()">重置</button>
+    <button class="sim-btn" onclick="simSign()">① 签名指针</button>
+    <button class="sim-btn" onclick="simGuess()">② 猜测 PAC</button>
+    <button class="sim-btn" onclick="simSpec()">③ 推测验证</button>
+    <button class="sim-btn" onclick="simAuto()">▶ 自动演示</button>
+  </div>
+
+  <div>
+    <h3 style="margin-bottom:0.5rem;">PAC 搜索空间 (0-127)</h3>
+    <p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+      <span style="color:var(--text-dim)">■ 未测试</span> &nbsp;
+      <span style="color:var(--warn)">■ 当前测试</span> &nbsp;
+      <span style="color:var(--danger)">■ PAC 错误</span> &nbsp;
+      <span style="color:var(--accent2)">■ PAC 正确!</span>
+    </p>
+    <div class="pac-grid" id="pac-grid"></div>
+  </div>
+
+  <div class="sim-log" id="sim-log">
+    <div class="log-entry" style="color:var(--text-dim);">等待操作...</div>
+  </div>
+</div>
+
+<h2 id="design">8. 关键设计决策</h2>
+
+<details>
+  <summary>为什么用 PACIASP/AUTIASP 而不是 PACIA/AUTIA？</summary>
+  <div class="detail-body">
+    <p><code>PACIA</code>/<code>AUTIA</code> 需要显式指定 modifier 寄存器，在某些 ARM 服务器编译器上不被支持（报 "unsupported instruction"）。</p>
+    <p><code>PACIASP</code>/<code>AUTIASP</code> 固定使用 SP 作为 modifier，是更广泛支持的变体。代价是需要手动管理 SP 一致性。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么 PAC 只有 7 bit？</summary>
+  <div class="detail-body">
+    <p>PAC 的位数取决于虚拟地址位宽和 TBI 配置。在 48-bit VA + TBI 下：</p>
+    <ul>
+      <li>Bits 0-47: 虚拟地址 (48 bit)</li>
+      <li>Bit 55: TBI 标记</li>
+      <li>Bits 48-54: PAC (7 bit = 128 种可能)</li>
+    </ul>
+    <p>如果 VA 位宽更小（如 39-bit），PAC 位数会更多（16 bit = 65536 种），暴力枚举成本更高。但在典型的 Linux 服务器配置下（48-bit VA），PAC 仅 7 bit。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么用 Spectre v1 PHT 而不是其他推测触发方式？</summary>
+  <div class="detail-body">
+    <p>PHT 误训练是最可靠的推测执行触发方式，几乎所有乱序执行 CPU 都受影响。其他方式如 SLS（直线推测）或 ret2spec 在某些微架构上不稳定。</p>
+    <p>PACMAN 需要一个可控的推测窗口来执行 gadget，PHT 提供了最稳定的窗口：2047 次训练 + 第 2048 次误预测。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么 TryPACGuess 内部有 10 次 attempt？</summary>
+  <div class="detail-body">
+    <p>缓存侧信道有噪声（上下文切换、超线程竞争等），单次测量可能不准确。10 次 attempt 提供多次采样机会，提高检测正确 PAC 的概率。如果 10 次都没有检测到明确的缓存命中，则认为该 PAC 猜测不正确。</p>
+  </div>
+</details>
+
+<h2 id="build">9. 构建与运行</h2>
+
+<h3>构建</h3>
+<pre><code><span class="code-comment"># 构建 PACMAN demo</span>
+cmake -B build .
+cmake --build build --target pacman --parallel</code></pre>
+
+<h3>运行</h3>
+<pre><code><span class="code-comment"># 运行 PACMAN demo (需要支持 PAC 的 ARM64 处理器)</span>
+./build/demos/pacman
+
+<span class="code-comment"># 预期输出 (成功):</span>
+<span class="code-comment"># PACMAN: Brute-forcing PAC via speculative execution</span>
+<span class="code-comment"># [INFO] Signed pointer: 0x3a0000100003e80</span>
+<span class="code-comment"># [INFO] Actual PAC: 58</span>
+<span class="code-comment"># [SUCCESS] PAC found: 58</span>
+<span class="code-comment"># [RESULT] PACMAN succeeded! Recovered PAC = 58</span></code></pre>
+
+<div class="card card-success">
+  <strong>运行条件：</strong>需要支持 PAC 的 ARM64 处理器（ARMv8.3-A+）。Apple M1/M2/M3、AWS Graviton3 (Neoverse V1)、Graviton4 (Neoverse V2) 等平台已验证。不支持 PAC 的处理器（如 Neoverse N1 / Graviton2）无法运行。
+</div>
+
+<h2 id="mitigation">10. 防御与缓解</h2>
+
+<h3>FPAC vs 无 FPAC</h3>
+<div class="compare-grid">
+  <div>
+    <div class="compare-label vuln">✘ 无 FPAC (PACMAN 可行)</div>
+    <pre style="margin:0; border:none; padding:0.5rem 0; font-size:0.85rem;">
+<span style="color:var(--danger)">autiasp → PAC 错误</span>
+<span style="color:var(--danger)">→ 指针损坏 (不崩溃)</span>
+<span style="color:var(--danger)">→ 推测 squash</span>
+<span style="color:var(--danger)">→ 攻击者无感知</span>
+<span style="color:var(--danger)">→ 可继续暴力枚举</span></pre>
+  </div>
+  <div>
+    <div class="compare-label fix">✔ 有 FPAC (PACMAN 被阻断)</div>
+    <pre style="margin:0; border:none; padding:0.5rem 0; font-size:0.85rem;">
+<span style="color:var(--accent2)">autiasp → PAC 错误</span>
+<span style="color:var(--accent2)">→ 立即架构异常!</span>
+<span style="color:var(--accent2)">→ 即使在推测中也触发</span>
+<span style="color:var(--accent2)">→ PAC Oracle 被破坏</span>
+<span style="color:var(--accent2)">→ 暴力枚举不可行</span></pre>
+  </div>
+</div>
+
+<h3>缓解方案汇总</h3>
+<table>
+  <tr><th>方案</th><th>层级</th><th>原理</th><th>开销</th></tr>
+  <tr>
+    <td><strong>FEAT_FPAC</strong></td>
+    <td>硬件</td>
+    <td>PAC 验证失败时立即产生架构异常，即使在推测执行中也无法抑制</td>
+    <td style="color:var(--accent2)">零 (硬件)</td>
+  </tr>
+  <tr>
+    <td>ISB 屏障</td>
+    <td>软件</td>
+    <td>在每条 PAC 验证指令后插入 ISB，阻止推测使用验证结果</td>
+    <td style="color:var(--danger)">高</td>
+  </tr>
+  <tr>
+    <td>Janus 编译器</td>
+    <td>编译器</td>
+    <td>利用 PA + BTI 防御推测执行攻击</td>
+    <td style="color:var(--accent2)">3.85%</td>
+  </tr>
+  <tr>
+    <td>修补内存破坏漏洞</td>
+    <td>软件</td>
+    <td>消除 PACMAN 的前提条件（需要内存破坏漏洞注入指针）</td>
+    <td>-</td>
+  </tr>
+  <tr>
+    <td>信息流追踪 (STT/NDA)</td>
+    <td>硬件/软件</td>
+    <td>将 PAC 验证输出标记为 tainted，阻止侧信道泄漏</td>
+    <td style="color:var(--warn)">中</td>
+  </tr>
+</table>
+
+<div class="card card-info">
+  <h3>FPAC 的硬件要求</h3>
+  <p>FEAT_FPAC 从 ARMv8.6-A 起成为强制特性。因此：</p>
+  <ul>
+    <li><strong>Armv8.3-A ~ Armv8.5-A</strong>（如 Neoverse V1、Apple M1）：FPAC 可选，大多数实现不支持 → <strong>PACMAN 可行</strong></li>
+    <li><strong>Armv8.6-A+</strong>（如 AmpereOne）：FPAC 强制 → <strong>PACMAN 被硬件缓解</strong></li>
+  </ul>
+</div>
+
+<h2 id="affected">11. 受影响平台</h2>
+
+<table>
+  <tr><th>处理器</th><th>PAC</th><th>FPAC</th><th>PACMAN 风险</th></tr>
+  <tr><td>Apple M1/M2/M3</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--danger)">No</td><td style="color:var(--danger)">高 (已验证)</td></tr>
+  <tr><td>Neoverse V1 (Graviton3)</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--danger)">No</td><td style="color:var(--danger)">高 (ARM 确认)</td></tr>
+  <tr><td>Neoverse V2 (Graviton4)</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--warn)">?</td><td style="color:var(--warn)">中高</td></tr>
+  <tr><td>Neoverse N2 (Marvell CN10xxx)</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--warn)">?</td><td style="color:var(--warn)">中高 (Marvell 确认)</td></tr>
+  <tr><td>AmpereOne (Armv8.6+)</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--accent2)">Yes</td><td style="color:var(--accent2)">低 (FPAC 缓解)</td></tr>
+  <tr><td>Neoverse N1 (Graviton2)</td><td style="color:var(--danger)">No</td><td>-</td><td style="color:var(--accent2)">无 (无 PAC)</td></tr>
+  <tr><td>Cavium ThunderX2</td><td style="color:var(--danger)">No</td><td>-</td><td style="color:var(--accent2)">无 (Armv8.1)</td></tr>
+</table>
+
+<div class="card card-danger">
+  <strong>最暴露的部署：</strong>AWS Graviton3（C7g/M7g/R7g 实例）— PAC 默认启用，无 FPAC，ARM 确认受 PACMAN 影响，广泛部署于生产环境。
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.85rem; text-align: center;">
+  <p>基于 <a href="https://github.com/google/safeside" style="color:var(--accent);">Google SafeSide</a> 项目源码分析</p>
+  <p style="margin-top:0.3rem;">参考文献：<a href="https://pacmanattack.com/" style="color:var(--accent);">PACMAN Attack (MIT CSAIL)</a> · <a href="https://arxiv.org/abs/2205.04969" style="color:var(--accent);">ISCA 2022 Paper</a></p>
+</div>
+
+<script>
+const ACTUAL_PAC = 58;
+let pacState = new Array(128).fill('untested');
+let currentGuess = 0;
+let phase = 0;
+let logEl = document.getElementById('sim-log');
+
+function initGrid() {
+  const grid = document.getElementById('pac-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 128; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'pac-cell pac-untested';
+    cell.id = 'pac-' + i;
+    cell.textContent = i;
+    cell.title = 'PAC guess ' + i;
+    grid.appendChild(cell);
+  }
+}
+
+function addLog(msg, cls) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (cls || '');
+  entry.textContent = msg;
+  logEl.appendChild(entry);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateGrid() {
+  for (let i = 0; i < 128; i++) {
+    document.getElementById('pac-' + i).className = 'pac-cell pac-' + pacState[i];
+  }
+}
+
+function simReset() {
+  pacState = new Array(128).fill('untested');
+  currentGuess = 0;
+  phase = 0;
+  updateGrid();
+  logEl.innerHTML = '<div class="log-entry" style="color:var(--text-dim);">已重置。准备开始 PACMAN 攻击模拟。</div>';
+  addLog('目标: 暴力枚举 7-bit PAC (0-127), 实际 PAC = ' + ACTUAL_PAC, '');
+}
+
+function simSign() {
+  addLog('① PACIASP 签名 private_data 指针', 'log-sign');
+  addLog('   mov g_sign_sp, sp    ← 保存 SP (modifier)', 'log-sign');
+  addLog('   mov x30, ptr', 'log-sign');
+  addLog('   paciasp              ← PAC = f(ptr, KeyA, SP) = ' + ACTUAL_PAC, 'log-sign');
+  addLog('   签名指针: 0x' + (ACTUAL_PAC).toString(16).padStart(2,'0') + '0000100003e80', 'log-sign');
+  phase = 1;
+}
+
+function simGuess() {
+  if (phase < 1) { addLog('请先执行步骤 ①', ''); return; }
+  if (currentGuess >= 128) { addLog('所有 PAC 值已测试', ''); return; }
+  pacState[currentGuess] = 'current';
+  updateGrid();
+  addLog('② 猜测 PAC = ' + currentGuess + ': InsertPAC(raw_ptr, ' + currentGuess + ')', 'log-train');
+  addLog('   构造指针: 0x' + currentGuess.toString(16).padStart(2,'0') + '0000100003e80', 'log-train');
+  phase = 2;
+}
+
+function simSpec() {
+  if (phase < 2) { addLog('请先执行步骤 ①②', ''); return; }
+  const guess = currentGuess;
+  const isCorrect = (guess === ACTUAL_PAC);
+
+  addLog('③ Spectre v1 PHT 训练 (2047 次) + 第 2048 次推测执行 PacmanGadget:', 'log-spec');
+  addLog('   mov sp, g_sign_sp    ← 恢复签名时 SP', 'log-spec');
+  addLog('   autiasp              ← 验证 PAC=' + guess, 'log-spec');
+
+  if (isCorrect) {
+    pacState[guess] = 'correct';
+    addLog('   ✓ PAC 正确! 指针有效 → ldrb 成功 → oracle 被访问', 'log-leak');
+    addLog('   ✓ 缓存侧信道检测到命中 → PAC = ' + guess + ' 是正确的!', 'log-leak');
+    addLog('   🎉 PACMAN 成功! 恢复 PAC = ' + guess + ' (实际 = ' + ACTUAL_PAC + ')', 'log-leak');
+    updateGrid();
+    phase = 3;
+  } else {
+    pacState[guess] = 'wrong';
+    addLog('   ✗ PAC 错误! 指针损坏 → ldrb fault → 推测 squash → 无缓存效果', 'log-spec');
+    updateGrid();
+    currentGuess++;
+    phase = 1;
+    if (currentGuess < 128) {
+      addLog('   继续尝试下一个 PAC 值...', '');
+    }
+  }
+}
+
+async function simAuto() {
+  simReset();
+  await sleep(300);
+  simSign();
+  await sleep(300);
+
+  for (let i = 0; i <= ACTUAL_PAC; i++) {
+    currentGuess = i;
+    simGuess();
+    await sleep(80);
+    simSpec();
+    await sleep(100);
+    if (i === ACTUAL_PAC) break;
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+initGrid();
+addLog('目标: 暴力枚举 7-bit PAC (0-127), 实际 PAC = ' + ACTUAL_PAC, '');
+</script>
+
+</body>
+</html>

